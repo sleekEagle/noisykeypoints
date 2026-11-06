@@ -150,15 +150,16 @@ def train(train_loader, model, loss_module, optimizer, epoch, args):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        if args.gpu is not None:
-            inputs, tr_inputs, loss_mask, in_mask = images[0].cuda(args.gpu, non_blocking=True), \
-                                                    images[1].cuda(args.gpu, non_blocking=True), \
-                                                    images[2].cuda(args.gpu, non_blocking=True), \
-                                                    images[3].cuda(args.gpu, non_blocking=True)
+        # noisykeypoints: always move inputs to the GPU. With gpu=None (multi-GPU DataParallel)
+        # the original code skipped this and crashed; .cuda(None) uses the current device.
+        inputs, tr_inputs, loss_mask, in_mask = images[0].cuda(args.gpu, non_blocking=True), \
+                                                images[1].cuda(args.gpu, non_blocking=True), \
+                                                images[2].cuda(args.gpu, non_blocking=True), \
+                                                images[3].cuda(args.gpu, non_blocking=True)
 
-            rot_im1, rot_im2,rot_im3  = images[4].cuda(args.gpu, non_blocking=True), \
-                            images[5].cuda(args.gpu, non_blocking=True), \
-                            images[6].cuda(args.gpu, non_blocking=True)
+        rot_im1, rot_im2,rot_im3  = images[4].cuda(args.gpu, non_blocking=True), \
+                        images[5].cuda(args.gpu, non_blocking=True), \
+                        images[6].cuda(args.gpu, non_blocking=True)
 
         if epoch < args.curriculum:
             output = model(inputs, tr_inputs)
@@ -203,11 +204,11 @@ def validate(val_loader, model, loss_module, epoch, args):
         end = time.time()
         for i, images in enumerate(val_loader):
 
-            if args.gpu is not None:
-                inputs, tr_inputs, loss_mask, in_mask = images[0].cuda(args.gpu, non_blocking=True), \
-                                                    images[1].cuda(args.gpu, non_blocking=True), \
-                                                    images[2].cuda(args.gpu, non_blocking=True), \
-                                                    images[3].cuda(args.gpu, non_blocking=True)
+            # noisykeypoints: see note in train().
+            inputs, tr_inputs, loss_mask, in_mask = images[0].cuda(args.gpu, non_blocking=True), \
+                                                images[1].cuda(args.gpu, non_blocking=True), \
+                                                images[2].cuda(args.gpu, non_blocking=True), \
+                                                images[3].cuda(args.gpu, non_blocking=True)
 
             rot_im1, rot_im2,rot_im3  = images[4].cuda(args.gpu, non_blocking=True), \
                             images[5].cuda(args.gpu, non_blocking=True), \
