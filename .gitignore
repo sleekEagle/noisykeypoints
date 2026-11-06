@@ -1,2 +1,4 @@
 CLAUDE.md
 Noise-Robust Unsupervised Keypoint Discovery*Research Plan.md
+results/
+__pycache__/
