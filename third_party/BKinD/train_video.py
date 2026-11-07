@@ -1,5 +1,9 @@
+import os
+import random
 import time
 import warnings
+
+import numpy as np
 
 import torch
 import torch.nn.parallel
@@ -35,6 +39,19 @@ def main():
 def main_worker(gpu, ngpus_per_node, args):
     global best_loss
     args.gpu = gpu
+    t_start = time.time()
+
+    # noisykeypoints: seed everything that is random before the model is built (weight init,
+    # data order; DataLoader workers are seeded from torch's generator). cudnn.benchmark still
+    # picks kernels non-deterministically, so two runs with one seed are close, not identical.
+    # Resuming does not restore the random state.
+    seed = getattr(args, 'seed', None)
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    print('seed:', seed)
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
@@ -70,11 +87,11 @@ def main_worker(gpu, ngpus_per_node, args):
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             if args.gpu is None:
-                checkpoint = torch.load(args.resume)
+                checkpoint = torch.load(args.resume, weights_only=False)  # noisykeypoints: our own checkpoints; newer torch defaults to True
             else:
                 # Map model to be loaded to specified single gpu.
                 loc = 'cuda:{}'.format(args.gpu)
-                checkpoint = torch.load(args.resume, map_location=loc)
+                checkpoint = torch.load(args.resume, map_location=loc, weights_only=False)
             args.start_epoch = checkpoint['epoch']
             best_loss = checkpoint['best_loss']
 
@@ -113,7 +130,18 @@ def main_worker(gpu, ngpus_per_node, args):
         return
 
     is_best = True
+    max_hours = getattr(args, 'max_hours', None)
+    last_epoch_s = None
     for epoch in range(args.start_epoch, args.epochs):
+        # noisykeypoints: stop between epochs if the next one would pass max_hours. The first
+        # rotation epoch takes ~2x longer than the ones before it, so the estimate doubles there.
+        if max_hours and last_epoch_s:
+            need = last_epoch_s * (2.1 if epoch == args.curriculum else 1.1)
+            if time.time() - t_start + need > max_hours * 3600:
+                print(f'STOPPED EARLY: time limit ({max_hours} h). Finished epochs: {epoch}. '
+                      f'Resume from {args.checkpoint}/checkpoint.pth.tar')
+                return
+        t_epoch = time.time()
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
@@ -138,7 +166,13 @@ def main_worker(gpu, ngpus_per_node, args):
             'optimizer' : optimizer.state_dict(),
             'scaler': scaler.state_dict(),
             'amp': args.amp,
+            'seed': seed,
+            'batch_size': args.batch_size,
         }, is_best, checkpoint=args.checkpoint)
+        last_epoch_s = time.time() - t_epoch
+        print(f'epoch {epoch} took {last_epoch_s / 60:.1f} min', flush=True)
+
+    print('TRAINING COMPLETE')
 
         
 def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):

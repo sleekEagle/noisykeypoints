@@ -52,7 +52,7 @@ def extract_bkind(clips, data_root, ckpt_path, nkpts, image_size, batch):
     from model.kpt_detector import Model
 
     model = Model(nkpts, pretrained=False, output_shape=(image_size // 4, image_size // 4))
-    sd = torch.load(ckpt_path, map_location='cpu')['state_dict']
+    sd = torch.load(ckpt_path, map_location='cpu', weights_only=False)['state_dict']
     sd = {k[7:] if k.startswith('module.') else k: v for k, v in sd.items()}
     md = model.state_dict()
     loaded = {k: v for k, v in sd.items() if k in md and v.shape == md[k].shape}

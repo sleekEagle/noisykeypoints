@@ -10,7 +10,7 @@ workers: 4
 epochs: 30
 start_epoch: 0
 schedule: 30
-batch_size: 16          # 32 (Human3.6M setting) filled the 8 GB GPU and spilled to system RAM: 4.8 s/iter
+batch_size: 32          # BKinD's setting; the experiment standard. ~7.5 GB with amp, so it does NOT fit the 8 GB laptop (spills to RAM); use Kaggle/Colab
 lr: 0.001
 momentum: 0.9
 weight_decay: 0.0001
@@ -19,7 +19,9 @@ pretrained: True
 gpu: 0
 val_schedule: 20
 curriculum: 4
-amp: False              # mixed precision (float16 networks, float32 losses); every run in a comparison must use the same value
+amp: True               # mixed precision (float16 networks, float32 losses); the experiment standard, 1.85x faster on T4
+seed: null              # set per run (1, 2, 3); null = unseeded
+max_hours: null         # e.g. 11.5 on Kaggle: stop cleanly between epochs before the session limit
 
 # Path to save checkpoint
 checkpoint: checkpoint/JHMDB_split1

@@ -61,6 +61,11 @@ def create_parser():
     # noisykeypoints: mixed precision (float16 networks, float32 losses). Off by default.
     parser.add_argument('--amp', default=False,
                         help='use automatic mixed precision for the networks')
+    # noisykeypoints: random seed (weight init, data order) and a wall-clock limit.
+    parser.add_argument('--seed', default=None, type=int,
+                        help='random seed; None = not seeded (original behaviour)')
+    parser.add_argument('--max-hours', dest='max_hours', default=None, type=float,
+                        help='stop cleanly between epochs before this many hours have passed')
 
     parser.add_argument('--config', default='config/CalMS21.yaml',
                         type=argparse.FileType(mode='r'))
