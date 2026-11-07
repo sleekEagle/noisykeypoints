@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 
 import scipy.io as sio
 
@@ -42,16 +43,24 @@ def main():
     p.add_argument('--jhmdb', default=r'D:\datasets\keypoint\JHMDB')
     p.add_argument('--out', default=r'D:\datasets\keypoint\JHMDB_bkind')
     p.add_argument('--split', type=int, default=1, choices=[1, 2, 3])
+    p.add_argument('--workers', type=int, default=32, help='files copied at the same time')
     a = p.parse_args()
 
     split = read_split(os.path.join(a.jhmdb, 'splits'), a.split)
     root = os.path.join(a.out, f'split{a.split}')
     if os.path.exists(root):
-        raise SystemExit(f'{root} already exists; delete it first to rebuild.')
+        # A folder without clips.json is a half-finished (interrupted) build.
+        done = os.path.exists(os.path.join(root, 'clips.json'))
+        raise SystemExit(f'{root} already exists' + ('' if done else
+                         ' but is INCOMPLETE (no clips.json)') + '; delete it first to rebuild.')
 
     def listdir(*p):  # skip Mac junk such as .AppleDouble
         return sorted(d for d in os.listdir(os.path.join(*p)) if not d.startswith('.'))
 
+    # Copying is limited by waiting on storage (slow on Kaggle's /kaggle/input), not by the CPU,
+    # so many files are copied at once in threads.
+    pool = ThreadPoolExecutor(max_workers=a.workers)
+    jobs = []
     meta = {}
     for action in listdir(a.jhmdb, 'joint_positions'):
         for clip in listdir(a.jhmdb, 'joint_positions', action):
@@ -65,10 +74,16 @@ def main():
             dst = os.path.join(root, part, f'{action}__{clip}')
             os.makedirs(dst)
             for f in frames[:n]:
-                link_or_copy(os.path.join(src, f), os.path.join(dst, f))
+                jobs.append(pool.submit(link_or_copy, os.path.join(src, f), os.path.join(dst, f)))
             meta[f'{action}__{clip}'] = {'action': action, 'clip': clip,
                                          'split': part, 'nframes': n}
+        print(f'{action}: queued', flush=True)
 
+    for j in jobs:
+        j.result()  # re-raises any copy error
+    pool.shutdown()
+
+    # clips.json is written last, so its presence means the layout is complete.
     json.dump(meta, open(os.path.join(root, 'clips.json'), 'w'), indent=1)
     for part in ('train', 'val'):
         c = [m for m in meta.values() if m['split'] == part]
