@@ -55,6 +55,12 @@ def main_worker(gpu, ngpus_per_node, args):
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
+    # noisykeypoints: mixed precision. GradScaler multiplies the loss before backward so small
+    # float16 gradients don't round to zero; with amp off it does nothing.
+    args.amp = bool(getattr(args, 'amp', False))
+    scaler = torch.amp.GradScaler('cuda', enabled=args.amp)
+    print('mixed precision (amp):', args.amp)
+
     # optionally resume from a checkpoint
     if not os.path.isdir(args.checkpoint):
         mkdir_p(args.checkpoint)
@@ -74,6 +80,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
+            if 'scaler' in checkpoint:
+                scaler.load_state_dict(checkpoint['scaler'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
             logger = Logger(os.path.join(args.checkpoint, 'log.txt'), title=title, resume=True)
@@ -109,7 +117,7 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train_loss = train(train_loader, model, loss_module, optimizer, epoch, args)
+        train_loss = train(train_loader, model, loss_module, optimizer, epoch, args, scaler)
 
         # evaluate on validation set every val_schedule epochs
         if epoch > 0 and epoch%args.val_schedule == 0:
@@ -128,10 +136,12 @@ def main_worker(gpu, ngpus_per_node, args):
             'state_dict': model.state_dict(),
             'best_loss': best_loss,
             'optimizer' : optimizer.state_dict(),
+            'scaler': scaler.state_dict(),
+            'amp': args.amp,
         }, is_best, checkpoint=args.checkpoint)
 
         
-def train(train_loader, model, loss_module, optimizer, epoch, args):
+def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
 
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -161,20 +171,23 @@ def train(train_loader, model, loss_module, optimizer, epoch, args):
                         images[5].cuda(args.gpu, non_blocking=True), \
                         images[6].cuda(args.gpu, non_blocking=True)
 
-        if epoch < args.curriculum:
-            output = model(inputs, tr_inputs)
-        else:
-            output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
+        # noisykeypoints: networks run in float16 when args.amp; losses are float32 (compute_loss.py).
+        with torch.autocast('cuda', dtype=torch.float16, enabled=args.amp):
+            if epoch < args.curriculum:
+                output = model(inputs, tr_inputs)
+            else:
+                output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
 
         loss = loss_module.update_loss(inputs, tr_inputs, loss_mask, output, epoch)
-        
+
         # measure accuracy and record loss
         losses.update(loss.item(), images[0].size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -215,9 +228,10 @@ def validate(val_loader, model, loss_module, epoch, args):
                             images[6].cuda(args.gpu, non_blocking=True)
 
             # compute output
-            output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
+            with torch.autocast('cuda', dtype=torch.float16, enabled=args.amp):
+                output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
             # Note that validate function only computes MSE loss
-            loss = loss_module.criterion[1](output[0] * loss_mask, tr_inputs * loss_mask)
+            loss = loss_module.criterion[1](output[0].float() * loss_mask, tr_inputs * loss_mask)
 
             losses.update(loss.item(), images[0].size(0))
 

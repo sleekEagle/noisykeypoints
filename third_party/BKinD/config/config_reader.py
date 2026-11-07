@@ -58,6 +58,10 @@ def create_parser():
     parser.add_argument('--curriculum', default=4, type=int,
                         help='apply rotation equivariance loss after N epochs')
 
+    # noisykeypoints: mixed precision (float16 networks, float32 losses). Off by default.
+    parser.add_argument('--amp', default=False,
+                        help='use automatic mixed precision for the networks')
+
     parser.add_argument('--config', default='config/CalMS21.yaml',
                         type=argparse.FileType(mode='r'))
 

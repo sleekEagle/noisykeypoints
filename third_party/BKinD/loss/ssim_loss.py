@@ -6,15 +6,15 @@ from typing import Tuple, Union, Iterable
 from piq.functional import gaussian_filter
 
 def compute_ssim(inputs, tr_inputs):
-    mean_tensor = torch.tensor([0.485, 0.456, 0.406]).reshape((3,1,1)).to(inputs.device)
-    std_tensor = torch.tensor([0.229, 0.224, 0.225]).reshape((3,1,1)).to(inputs.device)
+    mean_tensor = torch.tensor([0.485, 0.456, 0.406], device=inputs.device).reshape((3,1,1))
+    std_tensor = torch.tensor([0.229, 0.224, 0.225], device=inputs.device).reshape((3,1,1))
     edge_padding = torch.nn.ReplicationPad2d(10)
     score, to_pred = ssim(edge_padding(inputs*std_tensor + mean_tensor),
         edge_padding(tr_inputs*std_tensor + mean_tensor), reduction = 'none', full = True)
     to_pred = 1.0 - to_pred.unsqueeze(1)
 
     # noisykeypoints: newer piq needs an explicit float dtype (see note in ssim()).
-    kernel = gaussian_filter(11, 1.0, dtype=torch.float32).repeat(to_pred.size(1), 1, 1, 1).to(to_pred.device)
+    kernel = gaussian_filter(11, 1.0, device=to_pred.device, dtype=torch.float32).repeat(to_pred.size(1), 1, 1, 1)
     to_pred = F.conv2d(to_pred, weight=kernel, stride=1, padding=0, groups=1).repeat((1,3,1,1))
 
     return to_pred
@@ -83,7 +83,7 @@ def ssim(x: torch.Tensor, y: torch.Tensor, kernel_size: int = 11, kernel_sigma: 
     y = y / data_range
 
     # noisykeypoints: newer piq defaults dtype to None (integer arange); old piq used float.
-    kernel = gaussian_filter(kernel_size, kernel_sigma, dtype=torch.float32).repeat(x.size(1), 1, 1, 1).to(y)
+    kernel = gaussian_filter(kernel_size, kernel_sigma, device=y.device, dtype=torch.float32).repeat(x.size(1), 1, 1, 1)
     _compute_ssim_per_channel = _ssim_per_channel
     ssim_map, cs_map = _compute_ssim_per_channel(x=x, y=y, kernel=kernel, data_range=data_range, k1=k1, k2=k2)
     ssim_val = ssim_map.mean(1)

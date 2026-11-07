@@ -17,7 +17,7 @@ class separation_loss(nn.Module):
         
         dist_mat = torch.cdist(input_1, target)**2
 
-        mask_matrix = torch.ones((self.K, self.K)).fill_diagonal_(0).unsqueeze(0).to(input_1.device)
+        mask_matrix = torch.ones((self.K, self.K), device=input_1.device).fill_diagonal_(0).unsqueeze(0)
 
         dist_mat = torch.exp(-1*dist_mat/(2*0.08**2))
 

@@ -24,7 +24,7 @@ class rotation_loss(nn.Module):
         c, s = torch.cos(angle_rad), torch.sin(angle_rad)
         rot_vec = torch.stack([c, s], dim=1)  # rot_matrix = [c, -s], [s, c]
         rot_vec2 = torch.stack([-s, c], dim=1)
-        rot_matrix = torch.stack((rot_vec, rot_vec2, torch.zeros(rot_vec2.size()).to(rot_vec2.device)), dim=2)
+        rot_matrix = torch.stack((rot_vec, rot_vec2, torch.zeros(rot_vec2.size(), device=rot_vec2.device)), dim=2)
         rot_matrix = rot_matrix.type(torch.float32)
         
         # crr_xy = torch.stack((pt[0], pt[1]), dim=1)

@@ -82,8 +82,8 @@ class Model(nn.Module):
         s_y = heatmap.sum(3)  # (N, K, H)
         s_x = heatmap.sum(2)  # (N, K, W)
         
-        y = torch.linspace(-1.0, 1.0, H).cuda()
-        x = torch.linspace(-1.0, 1.0, W).cuda()
+        y = torch.linspace(-1.0, 1.0, H, device=heatmap.device)
+        x = torch.linspace(-1.0, 1.0, W, device=heatmap.device)
         
         # u_y = (self.H_tensor * s_y).sum(2) / s_y.sum(2)  # (N, K)
         # u_x = (self.W_tensor * s_x).sum(2) / s_x.sum(2)

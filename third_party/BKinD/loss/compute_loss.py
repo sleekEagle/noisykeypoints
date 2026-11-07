@@ -37,10 +37,18 @@ class computeLoss:
         self.criterion = [recon_crit, nn.MSELoss().cuda(args.gpu), separation_crit, rotation_crit]
 
     def update_loss(self, inputs, tr_inputs, loss_mask, output, epoch):
-        to_pred = compute_ssim(inputs, tr_inputs)
+        # noisykeypoints: with mixed precision the model outputs may be float16. All loss
+        # maths (SSIM target, MSE, rotation, separation) stays in float32; only the VGG
+        # feature network runs in float16, and its features are cast back to float32.
+        amp = bool(getattr(self.args, 'amp', False))
+        output = _to_float(output)
+        to_pred = compute_ssim(inputs.float(), tr_inputs.float())
 
-        vgg_feat_in = self.loss_model(to_pred)
-        vgg_feat_out = self.loss_model(output[0])
+        with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
+            vgg_feat_in = self.loss_model(to_pred)
+            vgg_feat_out = self.loss_model(output[0])
+        vgg_feat_in = _to_float(vgg_feat_in)
+        vgg_feat_out = _to_float(vgg_feat_out)
 
         l = self.criterion[0](to_pred, output[0], loss_mask)
         wl = _exp_running_avg(l.mean(), init_val=self.args.perc_weight[0])
@@ -58,15 +66,15 @@ class computeLoss:
             loss += l.mean()
 
         if epoch >= self.args.curriculum:
-            deg = torch.ones((output[2][1].size()[0])).to(output[2][1].device) * 90
+            deg = torch.ones((output[2][1].size()[0]), device=output[2][1].device) * 90
             rot_loss, rot_label = self.criterion[3](output[2][0][:, :self.args.nkpts], output[2][1], deg)
             loss += rot_loss/3
 
-            deg = torch.ones((output[2][1].size()[0])).to(output[2][1].device) * 180
+            deg = torch.ones((output[2][1].size()[0]), device=output[2][1].device) * 180
             rot_loss, rot_label2 = self.criterion[3](output[2][0][:, :self.args.nkpts], output[2][2], deg)
             loss += rot_loss/3
 
-            deg = torch.ones((output[2][1].size()[0])).to(output[2][1].device) * -90
+            deg = torch.ones((output[2][1].size()[0]), device=output[2][1].device) * -90
             rot_loss, rot_label3 = self.criterion[3](output[2][0][:, :self.args.nkpts], output[2][3], deg)
             loss += rot_loss/3
 
@@ -83,6 +91,15 @@ class computeLoss:
             loss += separation.mean()
 
         return loss
+
+
+def _to_float(x):
+    """noisykeypoints: cast every float tensor in a nested tuple/list to float32."""
+    if torch.is_tensor(x):
+        return x.float() if x.is_floating_point() else x
+    if isinstance(x, (tuple, list)):
+        return type(x)(_to_float(v) for v in x)
+    return x
 
 
 # x_avg: torch variable which is initialized to init_val - weight

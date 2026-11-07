@@ -19,6 +19,7 @@ pretrained: True
 gpu: 0
 val_schedule: 20
 curriculum: 4
+amp: False              # mixed precision (float16 networks, float32 losses); every run in a comparison must use the same value
 
 # Path to save checkpoint
 checkpoint: checkpoint/JHMDB_split1
