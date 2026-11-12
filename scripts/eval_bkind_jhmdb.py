@@ -7,6 +7,11 @@
 3. Report PCK@0.1/0.2 (threshold = alpha * max side of the GT joint box), mean
    error and jitter, plus a visualization.
 
+Tuning mode (--tune): for choosing settings without touching the test set. 20% of the
+TRAIN clips (every 5th clip of each action, by name) are held out; the regression is fitted
+on the other train clips and scored on the held-out ones. Writes metrics_tune.{json,txt}.
+--keypoints reuses a saved keypoints.npz instead of running the model.
+
 Sanity modes: --source gt (GT joints as "keypoints"; PCK should be ~100%) and
 --source random (random keypoints; gives a floor).
 
@@ -150,6 +155,8 @@ def main():
     p.add_argument('--nkpts', type=int, default=10)
     p.add_argument('--image-size', type=int, default=128)
     p.add_argument('--batch', type=int, default=64)
+    p.add_argument('--tune', action='store_true', help='score on held-out TRAIN clips (for tuning)')
+    p.add_argument('--keypoints', help='reuse this keypoints.npz instead of running the model')
     a = p.parse_args()
 
     clips = load_clips(a.data)
@@ -158,7 +165,12 @@ def main():
         gts[c['name']], masks[c['name']] = load_gt(a.jhmdb, c)
 
     conf = None
-    if a.source == 'bkind':
+    if a.source == 'bkind' and a.keypoints:
+        z = np.load(a.keypoints)
+        kpts = {c['name']: z[f'kpts/{c["name"]}'] for c in clips}
+        conf = {c['name']: z[f'conf/{c["name"]}'] for c in clips}
+        assert kpts[clips[0]['name']].shape[1] == a.nkpts, 'set --nkpts to match the saved keypoints'
+    elif a.source == 'bkind':
         kpts, conf = extract_bkind(clips, a.data, a.checkpoint, a.nkpts, a.image_size, a.batch)
     elif a.source == 'gt':
         kpts = {k: to_norm(v) for k, v in gts.items()}
@@ -171,6 +183,12 @@ def main():
 
     tr = [c for c in clips if c['split'] == 'train']
     te = [c for c in clips if c['split'] == 'val']
+    if a.tune:  # hold out every 5th train clip of each action; never look at the test set
+        hold = set()
+        for act in sorted(set(c['action'] for c in tr)):
+            hold |= {c['name'] for c in [c for c in tr if c['action'] == act][::5]}
+        te = [c for c in tr if c['name'] in hold]
+        tr = [c for c in tr if c['name'] not in hold]
     cat = lambda d, cs: np.concatenate([d[c['name']] for c in cs])
     pred_n = fit_predict(cat(kpts, tr), to_norm(cat(gts, tr)), cat(masks, tr), cat(kpts, te))
     pred_px = to_pix(pred_n)
@@ -190,6 +208,7 @@ def main():
     actions = np.concatenate([[c['action']] * c['nframes'] for c in te])
 
     res = {
+        'mode': 'tune (held-out train clips)' if a.tune else 'test (official test clips)',
         'source': a.source, 'checkpoint': a.checkpoint, 'nkpts': a.nkpts,
         'train_frames': int(sum(c['nframes'] for c in tr)), 'val_frames': int(len(err)),
         'scored_joints': int(ok.sum()),
@@ -201,19 +220,20 @@ def main():
         'jitter_kpts_px': jitter([to_pix(kpts[c['name']]) for c in te]),
         'jitter_gt_px': jitter([gts[c['name']] for c in te]),
     }
-    json.dump(res, open(os.path.join(a.out, 'metrics.json'), 'w'), indent=1)
+    stem = 'metrics_tune' if a.tune else 'metrics'
+    json.dump(res, open(os.path.join(a.out, stem + '.json'), 'w'), indent=1)
     lines = [f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}"
              for k, v in res.items() if not isinstance(v, dict)]
     lines += ['per joint PCK@0.2: ' + ', '.join(f'{k} {v:.2f}' for k, v in res['per_joint_PCK@0.2'].items())]
     lines += ['per action PCK@0.2: ' + ', '.join(f'{k} {v:.2f}' for k, v in res['per_action_PCK@0.2'].items())]
-    open(os.path.join(a.out, 'metrics.txt'), 'w').write('\n'.join(lines) + '\n')
+    open(os.path.join(a.out, stem + '.txt'), 'w').write('\n'.join(lines) + '\n')
     print('\n'.join(lines))
 
-    if a.source == 'bkind':
+    if a.source == 'bkind' and not a.keypoints:
         np.savez_compressed(os.path.join(a.out, 'keypoints.npz'),
                             **{f'kpts/{k}': v for k, v in kpts.items()},
                             **{f'conf/{k}': v for k, v in conf.items()})
-    if a.source != 'random':
+    if a.source != 'random' and not a.tune:
         visualize(clips, a.data, kpts, pred, gts, os.path.join(a.out, 'vis_val.png'))
 
 
