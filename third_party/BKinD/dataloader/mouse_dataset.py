@@ -24,10 +24,16 @@ def generate_pair_images(root, gap=6, win_gap = 7):
 
         if video[:8] in no_cable_list:
             img_root = os.path.join(root, video)
-            img_list = sorted(os.listdir(img_root))
-            for index in range(0, len(img_list) - gap, win_gap):
-                im0 = os.path.join(img_root, img_list[index])
-                im1 = os.path.join(img_root, img_list[index+gap])
+            # noisykeypoints: pair frames by the frame number in the file name (image_XXXXXXXX.png)
+            # instead of by position in the folder listing, so a folder may hold only the frames
+            # that are used (scripts/prepare_calms21_bkind.py). Same pairs when all frames exist.
+            frames = {int(os.path.splitext(f)[0].split('_')[-1]): f
+                      for f in os.listdir(img_root) if f.startswith('image_')}
+            for index in range(0, max(frames) + 1 - gap, win_gap):
+                if index not in frames or index + gap not in frames:
+                    continue
+                im0 = os.path.join(img_root, frames[index])
+                im1 = os.path.join(img_root, frames[index+gap])
 
                 item = [im0, im1]
 

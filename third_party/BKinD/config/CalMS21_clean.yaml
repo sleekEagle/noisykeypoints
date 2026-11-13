@@ -1,0 +1,42 @@
+# CalMS21 task 1, clean frames, the 10 no-cable train videos. Built by scripts/prepare_calms21_bkind.py
+# (repo root): 256x256 grayscale PNGs, only the frames of the training pairs.
+# Same as BKinD's config/CalMS21.yaml except the data/checkpoint paths and the options we added
+# (amp, seed, max_hours).
+
+# Dataset
+dataset: CalMS21
+data: D:/datasets/keypoint/CalMS21_bkind/train   # folder of video folders (no train/val inside)
+
+# Training information
+workers: 4
+epochs: 15
+start_epoch: 0
+schedule: 15
+batch_size: 5           # BKinD's setting
+lr: 0.001
+momentum: 0.9
+weight_decay: 0.0001
+print_freq: 10
+pretrained: True
+gpu: 0
+val_schedule: 20        # > epochs: no val pass (BKinD's val set is the train folder anyway)
+curriculum: 4
+amp: True               # mixed precision (float16 networks, float32 losses), as in our JHMDB standard
+seed: null              # set per run (1, 2, 3); null = unseeded
+max_hours: null         # e.g. 11.5 on Kaggle: stop cleanly between epochs before the session limit
+
+# Path to save checkpoint
+checkpoint: checkpoint/CalMS21_clean
+# Specify number of keypoints
+nkpts: 10
+
+# Hyperparameters
+image_size: 256
+frame_gap: 6            # not used by the mouse loader: it always pairs frame i with i+6, every 7th i
+bounding_box: False
+
+perc_weight: [100.0, 1.6, 2.3, 1.8, 2.8, 100.0]
+
+# Specify model path
+# resume: checkpoint/CalMS21_clean
+evaluate: False
