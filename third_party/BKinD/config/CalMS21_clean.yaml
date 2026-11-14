@@ -24,6 +24,7 @@ curriculum: 4
 amp: True               # mixed precision (float16 networks, float32 losses), as in our JHMDB standard
 seed: null              # set per run (1, 2, 3); null = unseeded
 max_hours: null         # e.g. 11.5 on Kaggle: stop cleanly between epochs before the session limit
+noise: null             # clean. Noisy runs override it, e.g. {type: poisson_gaussian, photons: 20, read: 0.03, seed: 0} (dataloader/noise.py)
 
 # Path to save checkpoint
 checkpoint: checkpoint/CalMS21_clean

@@ -10,6 +10,7 @@ import torchvision
 import torchvision.transforms.functional as TF
 
 from dataloader.data_utils import *
+from dataloader.noise import apply_noise
 
 
 def generate_pair_images(root, gap=6, win_gap = 7):
@@ -49,9 +50,10 @@ class MouseDataset(data.Dataset):
 
     def __init__(self, root, transform=None, target_transform=None,
                  loader=default_loader, image_size=[128, 128], rotation=True,
-                 simplified=False, crop_box=True):
+                 simplified=False, crop_box=True, noise=None):
 
         samples = generate_pair_images(root)
+        self.noise = noise  # noisykeypoints: see dataloader/noise.py (None = clean)
 
         self.root = root
         self.loader = loader
@@ -88,6 +90,10 @@ class MouseDataset(data.Dataset):
 
         image0 = torchvision.transforms.Resize((height, width))(im0)
         image1 = torchvision.transforms.Resize((height, width))(im1)
+
+        # noisykeypoints: corrupt both frames after resizing, before the rotations and transforms.
+        image0 = apply_noise(image0, self.noise, img_path0)
+        image1 = apply_noise(image1, self.noise, img_path1)
 
         # Create 3 rotations
         deg = 90

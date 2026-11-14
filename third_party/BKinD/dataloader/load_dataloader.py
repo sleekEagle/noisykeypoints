@@ -49,6 +49,8 @@ def load_dataloader(args):
     elif args.dataset == 'CalMS21':
         traindir = os.path.join(args.data)
         valdir = os.path.join(args.data)
+        noise = getattr(args, 'noise', None)  # noisykeypoints: on-the-fly corruption (dataloader/noise.py)
+        print('noise:', noise)
 
         train_dataset = mouse.MouseDataset(traindir, transforms.Compose([
                               transforms.Resize(args.image_size),
@@ -61,7 +63,7 @@ def load_dataloader(args):
                               transforms.ToTensor(),
                               normalize,]),
                               image_size=[args.image_size, args.image_size],
-                              loader=loader)
+                              loader=loader, noise=noise)
 
         val_dataset = mouse.MouseDataset(valdir, transforms.Compose([
                               transforms.Resize(args.image_size),
@@ -74,7 +76,7 @@ def load_dataloader(args):
                               transforms.ToTensor(),
                               normalize,]),
                               image_size=[args.image_size, args.image_size],
-                              loader=loader)
+                              loader=loader, noise=noise)
 
     elif args.dataset == 'custom_dataset':
         traindir = os.path.join(args.data, 'train')
