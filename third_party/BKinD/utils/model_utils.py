@@ -4,7 +4,11 @@ import shutil
 
 def save_checkpoint(state, is_best, checkpoint='checkpoint', filename='checkpoint.pth.tar'):
     filepath = os.path.join(checkpoint, filename)
-    torch.save(state, filepath)
+    # noisykeypoints: write to a temporary file and swap it in only when complete, so a crash during
+    # the save (e.g. a Colab disconnect while writing to Drive) leaves the previous checkpoint intact.
+    tmp = filepath + '.tmp'
+    torch.save(state, tmp)
+    os.replace(tmp, filepath)
     if is_best:
         shutil.copyfile(filepath, os.path.join(checkpoint, 'model_best.pth.tar'))
 
