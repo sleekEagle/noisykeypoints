@@ -1,4 +1,5 @@
-"""Train (and, for JHMDB, score) BKinD on Kaggle. The notebooks notebooks/bkind_*_kaggle.ipynb only
+"""Train (and, for JHMDB, score) BKinD on Kaggle or Colab. The notebooks notebooks/bkind_*_kaggle.ipynb
+(and notebooks/bkind_calms21_colab.ipynb, which passes Drive folders as inp/out) only
 set the runs, clone this repo and call run(); everything else lives here, so changes reach Kaggle
 with a git push and the notebooks stay short.
 
@@ -147,7 +148,8 @@ def make_configs(runs, config, split, out, train_hours):
         r['dir'] = f'{out}/{r["name"]}'
         os.makedirs(r['dir'], exist_ok=True)
         cfg = dict(base, **r.get('overrides', {}))
-        cfg.update(data=split, checkpoint=r['dir'], gpu=0, workers=2,  # 2 loader workers each: Kaggle has 4 CPUs
+        # 2 loader workers each: Kaggle has 4 CPUs, free Colab 2
+        cfg.update(data=split, checkpoint=r['dir'], gpu=0, workers=2,
                    seed=r['seed'], max_hours=round(train_hours, 2))
         r['cfg'] = cfg
         r['config'] = f'{BK}/config/kaggle_{r["name"]}.yaml'
@@ -232,9 +234,14 @@ def score_jhmdb(runs, split, jhmdb):
                 pass
 
 
-def run(dataset, runs, max_hours=11.5, t0=None, data='/kaggle/temp', out='/kaggle/working/runs'):
+def run(dataset, runs, max_hours=11.5, t0=None, data='/kaggle/temp', out='/kaggle/working/runs',
+        inp='/kaggle/input'):
     """Everything after cloning: install packages, prepare the data, train all runs, report (and
-    score JHMDB). max_hours is the session limit (Kaggle: 12 h); t0 = time the session started."""
+    score JHMDB). max_hours is the session limit (Kaggle: 12 h); t0 = time the session started.
+    inp = where the uploaded data (and previous runs to resume) are; Colab passes Drive folders for
+    inp and out, so a run saved in out resumes there after a disconnect."""
+    global INPUT
+    INPUT = inp
     t0 = t0 or time.time()
     d = DATASETS[dataset]
     os.makedirs(data, exist_ok=True)
