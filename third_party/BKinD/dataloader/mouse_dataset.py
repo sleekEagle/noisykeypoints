@@ -10,7 +10,7 @@ import torchvision
 import torchvision.transforms.functional as TF
 
 from dataloader.data_utils import *
-from dataloader.noise import apply_noise
+from dataloader.noise import apply_noise_pair
 
 
 def generate_pair_images(root, gap=6, win_gap = 7):
@@ -92,8 +92,8 @@ class MouseDataset(data.Dataset):
         image1 = torchvision.transforms.Resize((height, width))(im1)
 
         # noisykeypoints: corrupt both frames after resizing, before the rotations and transforms.
-        image0 = apply_noise(image0, self.noise, img_path0)
-        image1 = apply_noise(image1, self.noise, img_path1)
+        # Done as a pair so that H.264 can encode A and B together (A = I-frame, B = P-frame).
+        image0, image1 = apply_noise_pair([image0, image1], self.noise, [img_path0, img_path1])
 
         # Create 3 rotations
         deg = 90

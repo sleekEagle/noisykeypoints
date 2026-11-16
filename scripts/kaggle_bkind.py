@@ -242,7 +242,7 @@ def run(dataset, runs, max_hours=11.5, t0=None, data='/kaggle/temp', out='/kaggl
     subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv'])
     sh(['git', '-C', REPO, 'log', '-1', '--format=code version: %h %s'])
     # Kaggle already has torch, torchvision, scipy, sklearn, opencv, h5py, pyyaml, pandas, seaborn.
-    sh([sys.executable, '-m', 'pip', 'install', '-q', 'piq', 'easydict'])
+    sh([sys.executable, '-m', 'pip', 'install', '-q', 'piq', 'easydict', 'av'])  # av: H.264 noise
 
     if dataset == 'calms21':
         split = prepare_calms21(data)
