@@ -50,11 +50,56 @@ def frame_key(path):
     return video, frame
 
 
+def poisson_from_uniform(u, lam):
+    """Exact Poisson(lam) samples by inverse CDF from uniforms u in (0, 1): the smallest k with
+    P(X <= k) >= u. Starts from the normal approximation and steps to the exact value."""
+    from scipy.special import gammaln, ndtri, pdtr
+    shape = np.shape(lam)
+    lam = np.asarray(lam, np.float64).ravel()
+    u = np.asarray(u, np.float64).ravel()
+    k = np.maximum(0.0, np.floor(lam + np.sqrt(lam) * ndtri(u)))
+    todo = np.arange(lam.size)                                  # pixels not yet settled
+    for _ in range(200):
+        kk, ll, uu = k[todo], lam[todo], u[todo]
+        cdf = pdtr(kk, ll)                                      # P(X <= k)
+        pmf = np.where(ll > 0, np.exp(kk * np.log(np.where(ll > 0, ll, 1.0)) - ll - gammaln(kk + 1)),
+                       (kk == 0).astype(np.float64))
+        up = cdf < uu                                           # k too small
+        down = ~up & (kk >= 1) & (cdf - pmf >= uu)              # P(X <= k-1) >= u: k too big
+        k[todo[up]] += 1
+        k[todo[down]] -= 1
+        todo = todo[up | down]
+        if todo.size == 0:
+            return k.reshape(shape)
+    raise RuntimeError('poisson_from_uniform did not converge')
+
+
+class FrozenRNG:
+    """Random generator for frozen noise. numpy's poisson() uses a variable number of random draws
+    per pixel, depending on the pixel's brightness, so two frames that differ anywhere (a moving
+    mouse, JPEG grain) fall out of step and get different noise from there on. Here poisson() uses
+    exactly one uniform per pixel (inverse CDF), so the same seed gives the same noise pattern on
+    every frame wherever the frames agree. Other draws (normal, gamma, uniform) don't depend on the
+    image, so they stay in step and are passed through unchanged."""
+
+    def __init__(self, gen):
+        self.gen = gen
+
+    def poisson(self, lam):
+        lam = np.asarray(lam, np.float64)
+        u = np.clip(self.gen.random(lam.shape), 1e-12, 1 - 1e-12)
+        return poisson_from_uniform(u, lam)
+
+    def __getattr__(self, name):
+        return getattr(self.gen, name)
+
+
 def rng_for(cfg, path):
     video, frame = frame_key(path)
     key = [int(cfg.get('seed', 0)), zlib.crc32(video.encode())]
-    if not cfg.get('frozen', False):
-        key.append(frame)
+    if cfg.get('frozen', False):
+        return FrozenRNG(np.random.default_rng(key))
+    key.append(frame)
     return np.random.default_rng(key)
 
 
