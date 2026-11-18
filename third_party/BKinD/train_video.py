@@ -101,7 +101,15 @@ def main_worker(gpu, ngpus_per_node, args):
                 scaler.load_state_dict(checkpoint['scaler'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
-            logger = Logger(os.path.join(args.checkpoint, 'log.txt'), title=title, resume=True)
+            # noisykeypoints: if log.txt is missing (e.g. never uploaded to Google Drive before a
+            # disconnect), start a new one instead of crashing; earlier epochs are then not in it.
+            log_path = os.path.join(args.checkpoint, 'log.txt')
+            if os.path.exists(log_path):
+                logger = Logger(log_path, title=title, resume=True)
+            else:
+                print(f"=> {log_path} missing; starting a new log (epochs before {checkpoint['epoch']} not listed)")
+                logger = Logger(log_path, title=title)
+                logger.set_names(['Learning Rate', 'Train Loss', 'Valid Loss',])
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
     else:

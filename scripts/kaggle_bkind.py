@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -181,7 +182,11 @@ def train(runs, poll_minutes, t0):
         if os.path.exists(ckpt):
             cmd += ['--resume', ckpt]
         env = dict(os.environ, PYTHONUNBUFFERED='1', CUDA_VISIBLE_DEVICES=str(i))  # sees only GPU i
-        r['log'] = open(f'{r["dir"]}/train_log.txt', 'a')
+        # The output goes to a local file, and new lines are appended to <run>/train_log.txt at every
+        # progress check: a file kept open on Google Drive may never be uploaded if the session dies.
+        r['local_log'] = os.path.join(tempfile.gettempdir(), f'{r["name"]}_train_log.txt')
+        r['log'] = open(r['local_log'], 'w')
+        r['copied'] = 0
         r['proc'] = subprocess.Popen(cmd, cwd=BK, env=env, stdout=r['log'], stderr=subprocess.STDOUT)
         print(f'GPU {i}: started {r["name"]}', '(resuming)' if '--resume' in cmd else '(fresh)')
 
@@ -189,16 +194,28 @@ def train(runs, poll_minutes, t0):
         lines = [l.rstrip() for l in open(path, errors='replace') if l.startswith(keys) or 'Error' in l]
         return lines[-1] if lines else '(starting)'
 
+    def copy_log(r):
+        """Append the new part of the local log to <run>/train_log.txt (opened and closed each time)."""
+        with open(r['local_log'], 'rb') as f:
+            f.seek(r['copied'])
+            new = f.read()
+        if new:
+            with open(f'{r["dir"]}/train_log.txt', 'ab') as f:
+                f.write(new)
+            r['copied'] += len(new)
+
     while any(r['proc'].poll() is None for r in runs):
         time.sleep(poll_minutes * 60)
         print(time.strftime('%H:%M'), f'({(time.time() - t0) / 3600:.1f} h into session)', flush=True)
         for r in runs:
-            print(f'   {r["name"]}: {last_line(r["dir"] + "/train_log.txt")}', flush=True)
+            copy_log(r)
+            print(f'   {r["name"]}: {last_line(r["local_log"])}', flush=True)
     for r in runs:
         r['log'].close()
+        copy_log(r)
         print(f'{r["name"]}: exit code {r["proc"].returncode}')
         if r['proc'].returncode != 0:
-            print(''.join(open(f'{r["dir"]}/train_log.txt', errors='replace').readlines()[-30:]))
+            print(''.join(open(r['local_log'], errors='replace').readlines()[-30:]))
 
 
 def report(runs):

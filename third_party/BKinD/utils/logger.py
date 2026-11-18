@@ -64,6 +64,11 @@ class Logger(object):
             self.numbers[self.names[index]].append(num)
         self.file.write('\n')
         self.file.flush()
+        # noisykeypoints: close and reopen after every line, so a copy on Google Drive is uploaded
+        # (Drive may not upload a file that stays open if the session dies).
+        name = self.file.name
+        self.file.close()
+        self.file = open(name, 'a')
 
     def plot(self, names=None):   
         names = self.names if names == None else names
