@@ -138,14 +138,17 @@ def prepare_jhmdb(data):
 
 # ---------------------------------------------------------------- training
 
-def make_configs(runs, config, split, out, train_hours):
+def make_configs(runs, config, split, out, train_hours, runs_per_gpu=1):
     """Write one config per run: the experiment settings from `config`, plus the run's overrides,
-    with this session's paths, seed and time limit."""
+    with this session's paths, seed and time limit. Runs are placed runs_per_gpu to a GPU, in order
+    (run i on GPU i // runs_per_gpu)."""
     import torch
     base = yaml.safe_load(open(f'{BK}/config/{config}'))
     n_gpu = torch.cuda.device_count()
-    assert len(runs) <= n_gpu, f'{len(runs)} runs but only {n_gpu} GPU(s): one run per GPU'
+    assert len(runs) <= n_gpu * runs_per_gpu, \
+        f'{len(runs)} runs but only {n_gpu} GPU(s) x {runs_per_gpu} run(s) per GPU'
     for i, r in enumerate(runs):
+        r['gpu'] = i // runs_per_gpu
         r['dir'] = f'{out}/{r["name"]}'
         os.makedirs(r['dir'], exist_ok=True)
         cfg = dict(base, **r.get('overrides', {}))
@@ -155,14 +158,21 @@ def make_configs(runs, config, split, out, train_hours):
         r['cfg'] = cfg
         r['config'] = f'{BK}/config/kaggle_{r["name"]}.yaml'
         yaml.safe_dump(cfg, open(r['config'], 'w'))
-        print(f'GPU {i}: {r["name"]}  seed={r["seed"]}  batch={cfg["batch_size"]}  amp={cfg["amp"]}  '
+        print(f'GPU {r["gpu"]}: {r["name"]}  seed={r["seed"]}  batch={cfg["batch_size"]}  amp={cfg["amp"]}  '
               f'epochs={cfg["epochs"]}  time limit={cfg["max_hours"]} h  changes={r.get("overrides", {})}'
               + (f'  continues from {r["start_from"]}' if r.get('start_from') else '')
               + ('  [tuning: scored on held-out train clips]' if r.get('tune') else ''))
+    if runs_per_gpu > 1:
+        # Runs sharing a GPU must fit in its memory together (CalMS21 at batch 5 ~3.9 GB each with amp),
+        # or the GPU runs out of memory. Compare each run's step time with a run alone on the GPU.
+        for g in sorted({r['gpu'] for r in runs}):
+            free, total = torch.cuda.mem_get_info(g)
+            print(f'GPU {g}: {sum(r["gpu"] == g for r in runs)} runs sharing {total / 2**30:.1f} GB '
+                  f'({free / 2**30:.1f} GB free), {os.cpu_count()} CPUs in the session')
 
 
 def train(runs, poll_minutes, t0):
-    """Start every run on its own GPU (resuming where possible) and print progress until all end."""
+    """Start every run on its GPU (resuming where possible) and print progress until all end."""
     for i, r in enumerate(runs):
         ckpt = f'{r["dir"]}/checkpoint.pth.tar'
         if not os.path.exists(ckpt):
@@ -181,14 +191,14 @@ def train(runs, poll_minutes, t0):
         cmd = [sys.executable, 'train_video.py', '--config', r['config']]
         if os.path.exists(ckpt):
             cmd += ['--resume', ckpt]
-        env = dict(os.environ, PYTHONUNBUFFERED='1', CUDA_VISIBLE_DEVICES=str(i))  # sees only GPU i
+        env = dict(os.environ, PYTHONUNBUFFERED='1', CUDA_VISIBLE_DEVICES=str(r['gpu']))  # sees only its GPU
         # The output goes to a local file, and new lines are appended to <run>/train_log.txt at every
         # progress check: a file kept open on Google Drive may never be uploaded if the session dies.
         r['local_log'] = os.path.join(tempfile.gettempdir(), f'{r["name"]}_train_log.txt')
         r['log'] = open(r['local_log'], 'w')
         r['copied'] = 0
         r['proc'] = subprocess.Popen(cmd, cwd=BK, env=env, stdout=r['log'], stderr=subprocess.STDOUT)
-        print(f'GPU {i}: started {r["name"]}', '(resuming)' if '--resume' in cmd else '(fresh)')
+        print(f'GPU {r["gpu"]}: started {r["name"]}', '(resuming)' if '--resume' in cmd else '(fresh)')
 
     def last_line(path, keys=('Epoch:', 'epoch ', 'STOPPED', 'COMPLETE', 'Error')):
         lines = [l.rstrip() for l in open(path, errors='replace') if l.startswith(keys) or 'Error' in l]
@@ -252,9 +262,11 @@ def score_jhmdb(runs, split, jhmdb):
 
 
 def run(dataset, runs, max_hours=11.5, t0=None, data='/kaggle/temp', out='/kaggle/working/runs',
-        inp='/kaggle/input'):
+        inp='/kaggle/input', runs_per_gpu=1):
     """Everything after cloning: install packages, prepare the data, train all runs, report (and
     score JHMDB). max_hours is the session limit (Kaggle: 12 h); t0 = time the session started.
+    runs_per_gpu > 1 trains several runs at once on one GPU (each a separate process); they must fit
+    in its memory together.
     inp = where the uploaded data (and previous runs to resume) are; Colab passes Drive folders for
     inp and out, so a run saved in out resumes there after a disconnect."""
     global INPUT
@@ -274,7 +286,7 @@ def run(dataset, runs, max_hours=11.5, t0=None, data='/kaggle/temp', out='/kaggl
         split, jhmdb = prepare_jhmdb(data)
 
     train_hours = max_hours - (time.time() - t0) / 3600 - d['reserve']
-    make_configs(runs, d['config'], split, out, train_hours)
+    make_configs(runs, d['config'], split, out, train_hours, runs_per_gpu)
     train(runs, d['poll'], t0)
     report(runs)
     if dataset == 'jhmdb':
