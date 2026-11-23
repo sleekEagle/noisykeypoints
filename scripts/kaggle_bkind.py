@@ -214,8 +214,12 @@ def train(runs, poll_minutes, t0):
                 f.write(new)
             r['copied'] += len(new)
 
-    while any(r['proc'].poll() is None for r in runs):
-        time.sleep(poll_minutes * 60)
+    running = lambda: any(r['proc'].poll() is None for r in runs)
+    while running():
+        # Check every 10 s whether all runs have ended; print progress every poll_minutes.
+        wake = time.time() + poll_minutes * 60
+        while running() and time.time() < wake:
+            time.sleep(10)
         print(time.strftime('%H:%M'), f'({(time.time() - t0) / 3600:.1f} h into session)', flush=True)
         for r in runs:
             copy_log(r)
