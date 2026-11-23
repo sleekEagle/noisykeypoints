@@ -74,6 +74,9 @@ def main():
     a = ap.parse_args()
 
     t0 = time.time()
+    # RunPod's newer images mark the system Python as "externally managed" (PEP 668), so pip refuses
+    # to install into it. The pod's container is disposable, so allow it (also for kaggle_bkind's pip).
+    os.environ['PIP_BREAK_SYSTEM_PACKAGES'] = '1'
     runs = load_runs(a.runs_file)
     print('runs:', ', '.join(r['name'] for r in runs), flush=True)
     if not a.no_install:
