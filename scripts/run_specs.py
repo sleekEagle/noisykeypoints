@@ -35,6 +35,15 @@ def warp_motion(run):
     return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_warpm_', 1), base_config='CalMS21_warp_motion.yaml')
 
 
+def warp_motion_sep(run, weight=100.0):
+    """Step 1c: step 1b + BKinD's separation loss (pushes keypoints apart so unused ones spread out):
+    warp_motion_sep(clean(1)) -> CalMS21_warpms_clean_s1. Weight 100: with 8 of 10 keypoints bunched
+    together the term is ~6, ~10% of the ~60 total loss (in BKinD it is ~13% of its loss when collapsed)."""
+    run = warp_motion(run)
+    overrides = dict(run.get('overrides', {}), warp_separation_weight=weight)
+    return dict(run, name=run['name'].replace('CalMS21_warpm_', 'CalMS21_warpms_', 1), overrides=overrides)
+
+
 def clean(seed):
     return dict(name=f'CalMS21_clean_s{seed}', seed=seed)
 
