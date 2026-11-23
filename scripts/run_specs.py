@@ -5,6 +5,24 @@ third_party/BKinD/dataloader/noise.py.
 """
 
 
+KINDS = dict(pg='poisson_gaussian', ll='low_light', sp='speckle', blur='motion_blur', h264='h264')
+BENCH_SSIM = [99, 98, 95, 90]  # benchmark levels 1-4 (decided 2026-11-23); see noise.py BENCH_LEVELS
+
+
+def bench(kind, ssim, seed, frozen=False):
+    """A benchmark cell: noise type `kind` (pg, sp, blur, h264) at SSIM 99/98/95/90, with the exact
+    parameters from noise.py BENCH_LEVELS written into the config. Named CalMS21_<kind>_ssim<NN>_s<seed>
+    (the same names the earlier edge runs used, so they count as benchmark cells)."""
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'third_party', 'BKinD'))
+    from dataloader.noise import BENCH_LEVELS
+    params = BENCH_LEVELS[KINDS[kind]][BENCH_SSIM.index(ssim)]
+    extra = dict(frozen=True) if frozen else {}
+    return noisy(f'CalMS21_{kind}_ssim{ssim}' + ('_frozen' if frozen else ''), seed,
+                 type=KINDS[kind], **params, **extra)
+
+
 def clean(seed):
     return dict(name=f'CalMS21_clean_s{seed}', seed=seed)
 

@@ -194,6 +194,23 @@ NOISE_LEVELS = {
 }
 
 
+# Benchmark levels (decided 2026-11-23, replacing the levels above for the paper): levels 1-4 =
+# SSIM 0.99 / 0.98 / 0.95 / 0.90, around where BKinD breaks. Measured on the same 200 CalMS21 frames
+# at 256 px (results/noise_calibration/calms21/bench_2026-11-23.json). Runs use these as explicit
+# parameters (scripts/run_specs.py: bench(kind, ssim, seed)), named CalMS21_<kind>_ssim<NN>_s<seed>.
+# `level: N` in a config still means NOISE_LEVELS above, so earlier runs keep their meaning.
+# Low light is not in this table yet (open question: at SSIM >= 0.9 it is either sensor noise with
+# gain, or plain dimming without it).
+BENCH_SSIM = [99, 98, 95, 90]
+BENCH_LEVELS = {  # measured SSIM in the comments
+    'poisson_gaussian': [{'photons': p, 'read': 0.6 / p} for p in (10000.0, 5000.0, 1900.0, 880.0)],
+    # 0.990 / 0.980 / 0.950 / 0.901
+    'speckle': [{'looks': v} for v in (3600.0, 1750.0, 650.0, 300.0)],      # 0.990 / 0.980 / 0.950 / 0.901
+    'motion_blur': [{'length': v} for v in (0.86, 1.27, 2.1, 3.18)],          # 0.990 / 0.981 / 0.951 / 0.900
+    'h264': [{'qp': v} for v in (18, 23, 29, 34)],                            # 0.990 / 0.980 / 0.949 / 0.896
+}
+
+
 def params_for(cfg):
     """Noise function parameters from a config: a calibrated `level`, or explicit parameters."""
     if 'level' in cfg:
