@@ -1,6 +1,9 @@
 """Train BKinD runs on a RunPod pod (any number of GPUs; one run per GPU).
 
-    python scripts/runpod_bkind.py RUNS_FILE [--dataset calms21] [--max-hours 100] [--stop-pod]
+    python scripts/runpod_bkind.py RUNS_FILE [--dataset calms21] [--max-hours 100] [--stop-pod] [--wait]
+
+RUNS may list more runs than the pod has GPUs: they then train in rounds, one run per GPU at a time
+(a queue). --wait first waits until any training already running on the pod has finished.
 
 Usually started in the background with scripts/runpod_start.sh, so it keeps running after you close
 the browser or SSH session. RUNS_FILE is a small Python file that defines RUNS, e.g.
@@ -70,6 +73,8 @@ def main():
     ap.add_argument('--workspace', default='/workspace')
     ap.add_argument('--data', default='/root/data', help='local working copy of the frames')
     ap.add_argument('--stop-pod', action='store_true', help='stop this pod when training has ended')
+    ap.add_argument('--wait', action='store_true',
+                    help='first wait until no other training (train_video.py) is running on this pod')
     ap.add_argument('--no-install', action='store_true')
     a = ap.parse_args()
 
@@ -83,11 +88,24 @@ def main():
         subprocess.run([sys.executable, '-m', 'pip', 'install', '-q'] + PACKAGES, check=True)
     inp = download(a.dataset, a.workspace)
 
+    if a.wait:  # queue behind training that is already running on this pod
+        while subprocess.run(['pgrep', '-f', 'python.*train_video.py'], capture_output=True).returncode == 0:
+            print(time.strftime('%H:%M'), 'waiting: another training is still running', flush=True)
+            time.sleep(60)
+
     sys.path.insert(0, HERE)
     import kaggle_bkind
+    import torch
+    slots = max(1, torch.cuda.device_count()) * a.runs_per_gpu
+    batches = [runs[i:i + slots] for i in range(0, len(runs), slots)]
+    if len(batches) > 1:
+        print(f'{len(runs)} runs, {slots} at a time: {len(batches)} rounds', flush=True)
     try:
-        kaggle_bkind.run(a.dataset, runs, max_hours=a.max_hours, t0=t0, data=a.data,
-                         out=f'{a.workspace}/runs', inp=inp, runs_per_gpu=a.runs_per_gpu)
+        for i, batch in enumerate(batches):  # a queue: more runs than GPUs train in turns
+            if len(batches) > 1:
+                print(f'===== round {i + 1}/{len(batches)}:', ', '.join(r['name'] for r in batch), flush=True)
+            kaggle_bkind.run(a.dataset, batch, max_hours=a.max_hours, t0=t0, data=a.data,
+                             out=f'{a.workspace}/runs', inp=inp, runs_per_gpu=a.runs_per_gpu)
     finally:
         print(f'finished after {(time.time() - t0) / 3600:.2f} h', flush=True)
         if a.stop_pod and os.environ.get('RUNPOD_POD_ID'):
