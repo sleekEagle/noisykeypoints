@@ -199,8 +199,8 @@ NOISE_LEVELS = {
 # at 256 px (results/noise_calibration/calms21/bench_2026-11-23.json). Runs use these as explicit
 # parameters (scripts/run_specs.py: bench(kind, ssim, seed)), named CalMS21_<kind>_ssim<NN>_s<seed>.
 # `level: N` in a config still means NOISE_LEVELS above, so earlier runs keep their meaning.
-# Low light is not in this table yet (open question: at SSIM >= 0.9 it is either sensor noise with
-# gain, or plain dimming without it).
+# Low light is not in this table (user, 2026-11-23): at SSIM >= 0.9 it is either sensor noise with
+# gain (same maths) or plain dimming without it. It keeps its old SSIM-0.6 run as a "severe" result.
 BENCH_SSIM = [99, 98, 95, 90]
 BENCH_LEVELS = {  # measured SSIM in the comments
     'poisson_gaussian': [{'photons': p, 'read': 0.6 / p} for p in (10000.0, 5000.0, 1900.0, 880.0)],
