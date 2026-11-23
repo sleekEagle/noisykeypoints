@@ -12,7 +12,9 @@ import cv2
 __all__ = ['show_heatmaps', 'show_img_with_heatmap', 'visualize_with_circles', 'save_images']
 
 
-def save_images(image, output, epoch, args, curr_epoch):
+def save_images(image, output, epoch, args, curr_epoch, motion=None):
+    # noisykeypoints: motion (N, 1, H, W) or None = the warp loss's motion weight, saved as motion_i.png
+    # for the same randomly chosen samples as image_i.png
     mean=[0.485, 0.456, 0.406]
     _mean = np.asarray(mean).reshape((3,1,1))
     std=[0.229, 0.224, 0.225]
@@ -61,6 +63,10 @@ def save_images(image, output, epoch, args, curr_epoch):
         recon_im = recon_im.astype('uint8')
         recon_im = recon_im.transpose((1,2,0))
         cv2.imwrite(os.path.join(im_dir, 'recon_'+str(i)+'.png'), recon_im)
+
+        if motion is not None:
+            cv2.imwrite(os.path.join(im_dir, 'motion_'+str(i)+'.png'),
+                        (motion[ix, 0].float().cpu().numpy() * 255).astype('uint8'))
     
 
 # functions to show an image

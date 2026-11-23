@@ -3,7 +3,6 @@ import random
 import time
 import warnings
 
-import cv2
 import numpy as np
 
 import torch
@@ -251,11 +250,8 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
                     kd = out['kp_driving']
                     vis = (out['prediction'], (kd['value'][..., 0], kd['value'][..., 1]), kd['heatmap'],
                            None, None, kd['confidence'])
-                    save_images(tr_inputs, vis, 0, args, epoch)  # 0: BKinD's pre-curriculum layout
-                    if loss_module.last_weight is not None:  # where the loss looks (white = motion)
-                        im_dir = os.path.join(args.checkpoint, 'samples/epoch_' + str(epoch))
-                        for k, w in enumerate(loss_module.last_weight[:5, 0].cpu().numpy()):
-                            cv2.imwrite(os.path.join(im_dir, f'motion_{k}.png'), (w * 255).astype('uint8'))
+                    # 0: BKinD's pre-curriculum layout; motion = where the loss looks (white = moved)
+                    save_images(tr_inputs, vis, 0, args, epoch, motion=loss_module.last_weight)
             continue
 
         rot_im1, rot_im2,rot_im3  = images[4].cuda(args.gpu, non_blocking=True), \
