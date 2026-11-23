@@ -17,6 +17,36 @@ from model.vggforLoss import VGG_feat
 from loss.separation_loss import separation_loss
 
 PYRAMID_SCALES = (1.0, 0.5, 0.25, 0.125)
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+def gaussian_blur(x, sigma):
+    """Separable Gaussian blur of (N, 1, H, W), reflection padding."""
+    r = max(1, int(round(3 * sigma)))
+    t = torch.arange(-r, r + 1, device=x.device, dtype=torch.float32)
+    k = torch.exp(-t ** 2 / (2 * sigma ** 2))
+    k = k / k.sum()
+    x = F.conv2d(F.pad(x, (r, r, 0, 0), mode='reflect'), k.view(1, 1, 1, -1))
+    return F.conv2d(F.pad(x, (0, 0, r, r), mode='reflect'), k.view(1, 1, -1, 1))
+
+
+def motion_weight(source, driving, sigma=4.0, tau=0.05, floor=0.05):
+    """Where things move between frames A (source) and B (driving): a fixed (no-gradient) per-pixel
+    weight in [floor, 1], shape (N, 1, H, W).
+
+    Like BKinD's target, it is large where A and B differ, so the small moving mice count for more
+    than the large still background. Unlike BKinD it is computed on heavily blurred frames (Gaussian,
+    sigma px at 256 px): blurring averages per-frame grain away (sigma 4 averages ~200 pixels, so noise
+    of 0.024 at SSIM 0.90 drops to ~0.002), while a moving mouse is a large, smooth change that survives.
+    `tau` is the blurred change (in [0, 1] intensity) that counts as full motion; `floor` keeps a small
+    weight on still pixels so the background is not ignored completely."""
+    with torch.no_grad():
+        mean = torch.tensor(IMAGENET_MEAN, device=source.device).view(1, 3, 1, 1)
+        std = torch.tensor(IMAGENET_STD, device=source.device).view(1, 3, 1, 1)
+        gray = lambda x: (x.float() * std + mean).mean(1, keepdim=True)  # back to [0, 1] grey
+        diff = (gaussian_blur(gray(source), sigma) - gaussian_blur(gray(driving), sigma)).abs()
+        return floor + (1 - floor) * (diff / tau).clamp(max=1)
 
 
 class Transform:
@@ -69,6 +99,12 @@ class WarpLoss:
         self.sigma_affine = float(getattr(args, 'warp_sigma_affine', 0.05))
         self.sigma_tps = float(getattr(args, 'warp_sigma_tps', 0.005))
         self.points_tps = int(getattr(args, 'warp_points_tps', 5))
+        # step 1b: weight the reconstruction loss by where things move (motion_weight); off = step 1
+        self.motion = bool(getattr(args, 'warp_motion_weight', False))
+        self.motion_sigma = float(getattr(args, 'warp_motion_sigma', 4.0))
+        self.motion_tau = float(getattr(args, 'warp_motion_tau', 0.05))
+        self.motion_floor = float(getattr(args, 'warp_motion_floor', 0.05))
+        self.last_weight = None  # the latest weight map, for the sample pictures
         self.vgg = torch.nn.DataParallel(VGG_feat()).cuda(args.gpu).eval()
         for p in self.vgg.parameters():
             p.requires_grad_(False)
@@ -78,19 +114,32 @@ class WarpLoss:
     def make_transform(self, bs, device):
         return Transform(bs, device, self.sigma_affine, self.sigma_tps, self.points_tps)
 
-    def perceptual(self, pred, target):
+    def perceptual(self, pred, target, weight=None):
+        """weight (N, 1, H, W) or None: with a weight, each feature layer's error is a weighted mean
+        over positions (the weight shrunk to the layer's size by area averaging), per image."""
         total = 0.0
         for down in self.pyramid:
             p, t = down(pred), down(target.float())
             with torch.autocast('cuda', dtype=torch.float16, enabled=self.amp):
                 fp, ft = self.vgg(p), self.vgg(t)
             for a, b in zip(fp, ft):
-                total = total + (a.float() - b.float().detach()).abs().mean()
+                err = (a.float() - b.float().detach()).abs()
+                if weight is None:
+                    total = total + err.mean()
+                else:
+                    w = F.adaptive_avg_pool2d(weight, err.shape[-2:])
+                    total = total + ((err.mean(1, keepdim=True) * w).sum((1, 2, 3)) / w.sum((1, 2, 3))).mean()
         return total
 
-    def __call__(self, out, driving, transform):
-        """Returns (total loss, dict of the parts for logging)."""
-        parts = {'perceptual': self.w_perc * self.perceptual(out['prediction'], driving)}
+    def __call__(self, out, driving, transform, source=None):
+        """Returns (total loss, dict of the parts for logging). source (frame A) is needed for the
+        motion weight."""
+        weight = None
+        if self.motion:
+            assert source is not None, 'warp_motion_weight needs frame A (source)'
+            weight = motion_weight(source, driving, self.motion_sigma, self.motion_tau, self.motion_floor)
+            self.last_weight = weight
+        parts = {'perceptual': self.w_perc * self.perceptual(out['prediction'], driving, weight)}
         if transform is not None and 'kp_transformed' in out:
             kp_d, kp_t = out['kp_driving'], out['kp_transformed']
             # positions: warping the keypoints found in T(B) must land on the keypoints of B

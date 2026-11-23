@@ -29,6 +29,12 @@ def warp(run):
     return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_warp_', 1), base_config='CalMS21_warp.yaml')
 
 
+def warp_motion(run):
+    """Step 1b: warping with the reconstruction loss weighted by where things move
+    (config CalMS21_warp_motion.yaml): warp_motion(clean(1)) -> CalMS21_warpm_clean_s1."""
+    return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_warpm_', 1), base_config='CalMS21_warp_motion.yaml')
+
+
 def clean(seed):
     return dict(name=f'CalMS21_clean_s{seed}', seed=seed)
 

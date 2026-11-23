@@ -3,6 +3,7 @@ import random
 import time
 import warnings
 
+import cv2
 import numpy as np
 
 import torch
@@ -231,7 +232,7 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
             transformed = transform.transform_frame(tr_inputs)
             with torch.autocast('cuda', dtype=torch.float16, enabled=args.amp):
                 out = model(inputs, tr_inputs, transformed)
-            loss, parts = loss_module(out, tr_inputs, transform)
+            loss, parts = loss_module(out, tr_inputs, transform, source=inputs)
             losses.update(loss.item(), images[0].size(0))
             for name, value in parts.items():
                 part_meters.setdefault(name, AverageMeter(name, ':.4f')).update(float(value), images[0].size(0))
@@ -251,6 +252,10 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
                     vis = (out['prediction'], (kd['value'][..., 0], kd['value'][..., 1]), kd['heatmap'],
                            None, None, kd['confidence'])
                     save_images(tr_inputs, vis, 0, args, epoch)  # 0: BKinD's pre-curriculum layout
+                    if loss_module.last_weight is not None:  # where the loss looks (white = motion)
+                        im_dir = os.path.join(args.checkpoint, 'samples/epoch_' + str(epoch))
+                        for k, w in enumerate(loss_module.last_weight[:5, 0].cpu().numpy()):
+                            cv2.imwrite(os.path.join(im_dir, f'motion_{k}.png'), (w * 255).astype('uint8'))
             continue
 
         rot_im1, rot_im2,rot_im3  = images[4].cuda(args.gpu, non_blocking=True), \

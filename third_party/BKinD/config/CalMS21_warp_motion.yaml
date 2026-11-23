@@ -1,0 +1,58 @@
+# Our method, step 1b: step 1 (CalMS21_warp.yaml) + reconstruction loss weighted by where things move (reports/warp_method_design.md).
+# Same data, pairs, image size, keypoints, epochs and batch as config/CalMS21_clean.yaml (BKinD);
+# different model, loss and optimizer (method: warp, Adam). Noisy runs override `noise`.
+
+# Dataset
+dataset: CalMS21
+data: D:/datasets/keypoint/CalMS21_bkind/train   # folder of video folders (no train/val inside)
+
+# Method
+method: warp            # model/warp_model.py + loss/warp_loss.py; `bkind` = the original model
+
+# Training information
+workers: 4
+epochs: 15
+start_epoch: 0
+schedule: 15
+batch_size: 5           # as BKinD on CalMS21
+lr: 0.0002              # Adam (betas 0.5, 0.999), FOMM's setting
+momentum: 0.9           # unused by Adam
+weight_decay: 0.0001    # unused by Adam
+print_freq: 10
+pretrained: True
+gpu: 0
+val_schedule: 20        # > epochs: no val pass
+curriculum: 4           # unused by the warp model (equivariance from epoch 0)
+amp: True               # networks in float16; geometry, warping and losses in float32
+seed: null
+max_hours: null
+noise: null
+
+# Warp losses (FOMM's defaults)
+warp_perceptual_weight: 10.0      # per VGG layer, at 4 pyramid scales (256, 128, 64, 32 px)
+warp_equivariance_value: 10.0     # keypoint positions under a random smooth warp
+warp_equivariance_jacobian: 10.0  # Jacobians under the same warp
+warp_separation_weight: 0.0       # BKinD's separation loss; off unless keypoints bunch up
+warp_sigma_affine: 0.05           # random warp: affine part
+warp_sigma_tps: 0.005             # random warp: thin-plate-spline bending
+warp_points_tps: 5
+warp_motion_weight: True          # weight the perceptual loss by motion (loss/warp_loss.py motion_weight)
+warp_motion_sigma: 4.0            # blur (px at 256) before differencing A and B; averages noise away
+warp_motion_tau: 0.05             # blurred change (0-1 grey) that counts as full motion
+warp_motion_floor: 0.05           # weight of still pixels
+
+# Path to save checkpoint
+checkpoint: checkpoint/CalMS21_warp_motion
+# Specify number of keypoints
+nkpts: 10
+
+# Hyperparameters
+image_size: 256
+frame_gap: 6            # not used by the mouse loader: it always pairs frame i with i+6, every 7th i
+bounding_box: False
+
+perc_weight: [100.0, 1.6, 2.3, 1.8, 2.8, 100.0]   # BKinD's loss only; unused by the warp model
+
+# Specify model path
+# resume: checkpoint/CalMS21_warp
+evaluate: False

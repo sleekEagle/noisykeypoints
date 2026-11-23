@@ -36,6 +36,7 @@ warp_separation_weight: 0.0       # BKinD's separation loss; off unless keypoint
 warp_sigma_affine: 0.05           # random warp: affine part
 warp_sigma_tps: 0.005             # random warp: thin-plate-spline bending
 warp_points_tps: 5
+warp_motion_weight: False         # step 1b (CalMS21_warp_motion.yaml) turns this on
 
 # Path to save checkpoint
 checkpoint: checkpoint/CalMS21_warp
