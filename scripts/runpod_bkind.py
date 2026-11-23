@@ -19,6 +19,7 @@ set them once as RunPod secrets / pod environment variables. Not needed once the
 volume and its files stay). Needs RunPod's `runpodctl` and RUNPOD_POD_ID, both present on pods.
 """
 import argparse
+import glob
 import os
 import subprocess
 import sys
@@ -42,8 +43,17 @@ def load_runs(path):
 
 
 def download(dataset, workspace):
-    """Download (or reuse the cached copy of) the dataset's frames from Kaggle. Returns its folder."""
+    """Download (or reuse the cached copy of) the dataset's frames from Kaggle. Returns its folder.
+    A finished earlier download (one with videos.json) is used directly, without asking Kaggle, so
+    the Kaggle token is only needed the first time."""
     os.environ.setdefault('KAGGLEHUB_CACHE', f'{workspace}/kagglehub')
+    cached = os.path.join(os.environ['KAGGLEHUB_CACHE'], 'datasets', *KAGGLE_DATASETS[dataset].split('/'))
+    versions = [v for v in glob.glob(f'{cached}/versions/*')
+                if os.path.basename(v).isdigit() and glob.glob(f'{v}/**/videos.json', recursive=True)]
+    if versions:
+        path = max(versions, key=lambda v: int(os.path.basename(v)))  # newest finished version
+        print(f'{dataset} frames: using the cached download {path}')
+        return path
     import kagglehub
     path = kagglehub.dataset_download(KAGGLE_DATASETS[dataset])
     print(f'{dataset} frames: {path}')
