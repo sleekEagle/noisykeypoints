@@ -3,7 +3,9 @@
     python scripts/runpod_bkind.py RUNS_FILE [--dataset calms21] [--max-hours 100] [--stop-pod] [--wait]
 
 RUNS may list more runs than the pod has GPUs: they then train in rounds, one run per GPU at a time
-(a queue). --wait first waits until any training already running on the pod has finished.
+(a queue). Only one launcher per pod trains at a time (a lock in /tmp); a second one exits, unless
+started with --wait, in which case it waits for the first (and for any hand-started training) to end.
+So several launchers started with --wait form a queue in the order they get the lock.
 
 Usually started in the background with scripts/runpod_start.sh, so it keeps running after you close
 the browser or SSH session. RUNS_FILE is a small Python file that defines RUNS, e.g.
@@ -43,6 +45,22 @@ def load_runs(path):
     names = [r['name'] for r in ns['RUNS']]
     assert len(set(names)) == len(names), f'run names must be unique: {names}'
     return ns['RUNS']
+
+
+def acquire_pod_lock(wait, path='/tmp/runpod_bkind.lock'):
+    """Exclusive lock for this pod. Without --wait, exit if another launcher holds it; with --wait,
+    block until it is free. The lock is released when this process exits (even if it crashes)."""
+    import fcntl
+    f = open(path, 'w')
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        if not wait:
+            raise SystemExit('another launcher is training on this pod; start with --wait to queue behind it')
+        print(time.strftime('%H:%M'), 'waiting for the launcher that is running now to finish', flush=True)
+        fcntl.flock(f, fcntl.LOCK_EX)
+        print(time.strftime('%H:%M'), 'previous launcher finished; starting', flush=True)
+    return f
 
 
 def download(dataset, workspace):
@@ -88,7 +106,11 @@ def main():
         subprocess.run([sys.executable, '-m', 'pip', 'install', '-q'] + PACKAGES, check=True)
     inp = download(a.dataset, a.workspace)
 
-    if a.wait:  # queue behind training that is already running on this pod
+    # Only one launcher per pod uses the GPU at a time: a lock on the pod's local disk (not on the
+    # network volume, which other pods share). --wait queues behind the launcher holding it.
+    lock = acquire_pod_lock(a.wait)  # noqa: F841 (held until this process exits)
+
+    if a.wait:  # also wait for training started outside a launcher (e.g. a hand-started test)
         while subprocess.run(['pgrep', '-f', 'python.*train_video.py'], capture_output=True).returncode == 0:
             print(time.strftime('%H:%M'), 'waiting: another training is still running', flush=True)
             time.sleep(60)
