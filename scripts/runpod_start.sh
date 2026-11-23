@@ -7,7 +7,8 @@ set -e
 cd "$(dirname "$0")/.."
 git pull -q
 mkdir -p /workspace/logs
-LOG=/workspace/logs/$(date +%Y-%m-%d_%H%M).log
+# date + runs-file name, so two launchers started in the same minute get separate logs
+LOG=/workspace/logs/$(date +%Y-%m-%d_%H%M%S)_$(basename "$1" .py).log
 PYTHONUNBUFFERED=1 nohup python -u scripts/runpod_bkind.py "$@" > "$LOG" 2>&1 &
 echo "started (process $!). Follow it with:"
 echo "  tail -f $LOG"
