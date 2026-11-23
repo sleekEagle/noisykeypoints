@@ -16,8 +16,10 @@ from config.config_reader import parse_args, create_parser
 from dataloader.load_dataloader import load_dataloader
 
 from model.unsupervised_model import Model
+from model.warp_model import WarpModel  # noisykeypoints: our method (method: warp)
 
 from loss.compute_loss import *
+from loss.warp_loss import WarpLoss
 
 from utils import Logger, mkdir_p, save_images
 from utils.model_utils import *
@@ -58,7 +60,15 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # create model
     output_shape = (int(args.image_size/4), int(args.image_size/4))
-    model = Model(args.nkpts, output_shape=output_shape)
+    # noisykeypoints: `method: warp` in the config trains our keypoint-driven warping model
+    # (model/warp_model.py, loss/warp_loss.py, reports/warp_method_design.md) with Adam;
+    # the default `bkind` is the original model, loss and SGD, unchanged.
+    args.method = getattr(args, 'method', 'bkind') or 'bkind'
+    print('method:', args.method)
+    if args.method == 'warp':
+        model = WarpModel(args.nkpts, output_shape=output_shape)
+    else:
+        model = Model(args.nkpts, output_shape=output_shape)
 
     if args.gpu is not None:
         torch.cuda.set_device(args.gpu)
@@ -66,11 +76,14 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         model = torch.nn.DataParallel(model).cuda()
 
-    loss_module = computeLoss(args)
-
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    if args.method == 'warp':
+        loss_module = WarpLoss(args)
+        optimizer = torch.optim.Adam(model.parameters(), args.lr, betas=(0.5, 0.999))
+    else:
+        loss_module = computeLoss(args)
+        optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                    momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
 
     # noisykeypoints: mixed precision. GradScaler multiplies the loss before backward so small
     # float16 gradients don't round to zero; with amp off it does nothing.
@@ -176,6 +189,7 @@ def main_worker(gpu, ngpus_per_node, args):
             'amp': args.amp,
             'seed': seed,
             'batch_size': args.batch_size,
+            'method': args.method,
         }, is_best, checkpoint=args.checkpoint)
         last_epoch_s = time.time() - t_epoch
         print(f'epoch {epoch} took {last_epoch_s / 60:.1f} min', flush=True)
@@ -197,6 +211,7 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
     model.train()
 
     end = time.time()
+    part_meters = {}  # noisykeypoints: running averages of the warp loss parts
 
     for i, images in enumerate(train_loader):
         # measure data loading time
@@ -208,6 +223,35 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
                                                 images[1].cuda(args.gpu, non_blocking=True), \
                                                 images[2].cuda(args.gpu, non_blocking=True), \
                                                 images[3].cuda(args.gpu, non_blocking=True)
+
+        if args.method == 'warp':
+            # noisykeypoints: our method. Frame A (inputs) is warped into frame B (tr_inputs); a random
+            # smooth warp of B gives the equivariance targets. BKinD's rotated copies are not used.
+            transform = loss_module.make_transform(tr_inputs.shape[0], tr_inputs.device)
+            transformed = transform.transform_frame(tr_inputs)
+            with torch.autocast('cuda', dtype=torch.float16, enabled=args.amp):
+                out = model(inputs, tr_inputs, transformed)
+            loss, parts = loss_module(out, tr_inputs, transform)
+            losses.update(loss.item(), images[0].size(0))
+            for name, value in parts.items():
+                part_meters.setdefault(name, AverageMeter(name, ':.4f')).update(float(value), images[0].size(0))
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            batch_time.update(time.time() - end)
+            end = time.time()
+            if i % args.print_freq == 0:
+                progress.display(i)
+                if i % (args.print_freq * 50) == 0:
+                    print('   loss parts: ' + '  '.join(f'{m.name} {m.avg:.4f}' for m in part_meters.values()),
+                          flush=True)
+                if args.visualize:
+                    kd = out['kp_driving']
+                    vis = (out['prediction'], (kd['value'][..., 0], kd['value'][..., 1]), kd['heatmap'],
+                           None, None, kd['confidence'])
+                    save_images(tr_inputs, vis, 0, args, epoch)  # 0: BKinD's pre-curriculum layout
+            continue
 
         rot_im1, rot_im2,rot_im3  = images[4].cuda(args.gpu, non_blocking=True), \
                         images[5].cuda(args.gpu, non_blocking=True), \
@@ -264,6 +308,13 @@ def validate(val_loader, model, loss_module, epoch, args):
                                                 images[1].cuda(args.gpu, non_blocking=True), \
                                                 images[2].cuda(args.gpu, non_blocking=True), \
                                                 images[3].cuda(args.gpu, non_blocking=True)
+
+            if getattr(args, 'method', 'bkind') == 'warp':  # noisykeypoints: L1 of the warped frame
+                with torch.autocast('cuda', dtype=torch.float16, enabled=args.amp):
+                    out = model(inputs, tr_inputs)
+                loss = (out['prediction'].float() - tr_inputs.float()).abs().mean()
+                losses.update(loss.item(), images[0].size(0))
+                continue
 
             rot_im1, rot_im2,rot_im3  = images[4].cuda(args.gpu, non_blocking=True), \
                             images[5].cuda(args.gpu, non_blocking=True), \

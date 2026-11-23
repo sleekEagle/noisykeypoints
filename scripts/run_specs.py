@@ -23,6 +23,12 @@ def bench(kind, ssim, seed, frozen=False):
                  type=KINDS[kind], **params, **extra)
 
 
+def warp(run):
+    """The same run with our warping method (config CalMS21_warp.yaml) instead of BKinD:
+    warp(bench('pg', 95, 1)) -> CalMS21_warp_pg_ssim95_s1, warp(clean(1)) -> CalMS21_warp_clean_s1."""
+    return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_warp_', 1), base_config='CalMS21_warp.yaml')
+
+
 def clean(seed):
     return dict(name=f'CalMS21_clean_s{seed}', seed=seed)
 
