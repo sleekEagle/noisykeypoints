@@ -1,6 +1,6 @@
 # Method step 1: keypoint-driven warping + equivariance (design)
 
-2026-11-23. Status: design, not yet implemented. Research plan, Method items 2 and 6 ("build order: 2 and 6 first on top of the existing BKinD code").
+2026-11-23. Status: **implemented** (commit `a5dc6ba`), checked on CPU and in a short GPU test; first full runs queued on RunPod (see "Implementation status" at the end). Research plan, Method items 2 and 6 ("build order: 2 and 6 first on top of the existing BKinD code").
 
 ## Goal
 
@@ -20,6 +20,46 @@ That way any difference from BKinD comes from the warping. Clip encoders, the co
 3. From epoch 4, the rotated copies of B (90°, 180°, −90°) must give rotated heatmaps (rotation equivariance), and a separation loss keeps keypoints apart.
 
 With independent noise in A and B, step 2's target is noise everywhere. The generator can lower its loss by painting noise-like texture, so keypoints aren't needed to explain the real motion. Our CalMS21 runs show the collapse, while frozen noise (identical in A and B) trains fine.
+
+## Background: keypoints, Jacobians and warping, in plain terms
+
+This method follows the First Order Motion Model (FOMM; Siarohin et al., NeurIPS 2019).
+
+### What the Jacobian is
+A keypoint's position says *where* a body part is. When a mouse turns its head, the small patch of fur around the head keypoint also **rotates**; when it stretches or squashes, the patch **stretches**. A shift alone can't describe that. Each keypoint therefore also carries a 2×2 matrix J, its **Jacobian**, describing how a small neighbourhood around it is turned and stretched. A point a small offset d from the keypoint moves to J·d:
+
+| J | What happens to the patch |
+| --- | --- |
+| [[1, 0], [0, 1]] | nothing (identity) |
+| [[cos θ, −sin θ], [sin θ, cos θ]] | rotated by θ |
+| [[1.2, 0], [0, 1]] | stretched 20% sideways |
+
+Position (2 numbers) plus Jacobian (4 numbers) is a **first-order** description of the motion near the keypoint, hence the name "first order motion".
+
+### How the network estimates it
+Nothing measures the Jacobian directly, and there are no labels: the network **learns to predict** it, and is trained only by whether it helps warp one frame into the next.
+- The keypoint network already outputs one heatmap per keypoint (bright where it thinks the keypoint is); the position is the heatmap-weighted mean of pixel positions (soft argmax).
+- For the Jacobian it outputs **4 extra maps per keypoint**, one per matrix entry. Each entry is read off as the average of its map **weighted by the keypoint's heatmap**:
+
+  J_k = Σ_pixels z heatmap_k(z) · Jmaps_k(z)
+
+  In effect the network says "this is how the patch is turned and stretched" at every pixel, and the answer is read out where the keypoint is.
+
+### How a frame is warped with it
+To make frame B from frame A, every pixel z of B asks where in A it comes from. Near keypoint k the answer is
+
+  z_A ≈ p_k^A + J_k^A (J_k^B)⁻¹ (z − p_k^B):
+
+take z's offset from the keypoint in B, undo B's local turn/stretch, apply A's, and add the result to the keypoint's position in A. Each keypoint gives such a local rule, and a background rule says "don't move". A small network (the dense motion network) decides which rule owns each pixel and blends them into one smooth motion field; frame A is then resampled along that field.
+
+### How it learns without labels
+1. **Reconstruction.** The warped frame A must look like the real frame B. A wrong Jacobian puts pixels in the wrong place, the error rises, and gradient descent pushes J towards the real local motion.
+2. **Equivariance.** Bend a frame with a known random warp T (rotation, stretch, slight bending) and run the network on both versions. The keypoints must move by T, and the Jacobians must change by T's own local stretch, J(T(image)) ≈ ∇T · J(image). ∇T is known exactly because we chose T. This stops the network from inventing arbitrary matrices.
+
+### Why this should ignore noise
+FOMM also has a generator that **paints in** regions that moving pixels can't explain (things coming into view). Our decoder may not paint. Fresh per-frame noise can't be produced by moving the pixels of frame A, because B's noise is new and random, so the only way to lower the error is to get the **real** motion right. BKinD's decoder paints its target and is tempted to spend keypoints on noise.
+
+The cost: newly visible areas (bedding uncovered by a moving mouse) can't be produced by moving pixels either, so some error remains there. The plan's confidence mask (method step 2) is meant to let the model mark such pixels as "can't be explained by motion" instead of distorting the keypoints to fit them.
 
 ## The new model (FOMM motion module, no generator)
 
@@ -90,3 +130,33 @@ predicted B = `grid_sample(frame A, flow)`, at 256×256, bilinear. No generator,
 - **Blurring as a shortcut under noise.** Bilinear sampling at fractional positions averages neighbouring noisy pixels, which slightly lowers the error against B's independent noise. The model could prefer smeared, sub-pixel flows. The VGG loss and the coarse scales dampen this. Check the flow on noisy runs for a pattern of tiny shifts everywhere.
 - **Uncovered regions:** unavoidable error where a mouse moves away. Acceptable in step 1; the confidence mask (step 2 of the build order) handles it.
 - **Jacobian blow-ups:** a near-singular J_B makes J_B⁻¹ explode. Clamp the determinant and compute in float32.
+
+## Implementation status (2026-11-23)
+
+### Code (commit `a5dc6ba`; all paths under `third_party/BKinD/`)
+| File | What it holds |
+| --- | --- |
+| `model/warp_model.py` | `WarpModel`. `detect()` returns keypoints (`value` (N, K, 2) as (x, y) in [−1, 1], `jacobian` (N, K, 2, 2), `heatmap`, `confidence`). `forward(A, B, transformed)` returns the prediction (A resampled along the flow, `grid_sample`, `padding_mode='border'`), the keypoints of A, B and T(B), the flow and the blend masks. The Jacobian head is a 3×3 conv on `globalNet`'s last 256-channel feature map (64×64), with zero weights and an identity bias. |
+| `model/dense_motion.py` | From FOMM: `Hourglass` (64 base channels, max 1024, 5 blocks), `AntiAliasInterpolation2d`, `kp2gaussian`, `make_coordinate_grid`, `DenseMotionNetwork` (K+1 motions, motion 0 = identity, softmax masks, flow at 64×64). Also `safe_inverse_2x2`, which keeps \|det\| ≥ 1e-3. No occlusion map. `align_corners=True` everywhere, to match BKinD's `linspace(−1, 1)` coordinates. |
+| `loss/warp_loss.py` | From FOMM: `Transform` (random affine σ 0.05 + thin-plate spline σ 0.005 on 5×5 points; `transform_frame`, `warp_coordinates`, `jacobian` by autograd). `WarpLoss`: VGG-19 perceptual loss (BKinD's `VGG_feat`, 5 layers) at 4 scales (256/128/64/32 px), L1, weight 10. Keypoint equivariance: L1 of kp(B) − T(kp(T(B))), weight 10. Jacobian equivariance: L1 of I − J(B)⁻¹ ∇T J(T(B)), weight 10. Optional separation, weight 0. |
+| `train_video.py` | `method: warp` picks `WarpModel`, `WarpLoss` and Adam (lr from config, betas 0.5/0.999). Each step: random `Transform` of B, forward under autocast, loss in float32. It prints the loss parts every 500 steps and saves samples like BKinD (`recon_*` = the warped prediction). `method: bkind` (default) is unchanged. |
+| `config/CalMS21_warp.yaml` | `CalMS21_clean.yaml` + `method: warp`, lr 2e-4, the `warp_*` loss weights and warp settings. |
+| `scripts/run_specs.py` | `warp(run)`: the same run with our method, e.g. `warp(bench('pg', 95, 1))` → `CalMS21_warp_pg_ssim95_s1`. It sets the per-run `base_config` that `kaggle_bkind.make_configs` reads. |
+
+Mixed precision: the ResNet, `globalNet`, Jacobian head, hourglass and VGG run in float16. Keypoint maths, Jacobians and their inverses, sparse motions, `grid_sample`, the random transform and all losses run in float32.
+
+### Checks so far
+- **CPU maths checks (laptop, no training):**
+  - identical keypoints in A and B → every motion is the identity;
+  - shifted keypoints → motions shift by exactly that amount;
+  - `safe_inverse_2x2` = `torch.inverse`;
+  - initial Jacobians = identity;
+  - the same frame in and out → prediction = source (max difference 2e-4);
+  - the transform's Jacobian = its affine part when there is no bending.
+- **GPU test on the RunPod RTX 4090** (1,570 steps, sharing the GPU with a BKinD run):
+  - runs without errors under mixed precision, ~0.06 s/step, 3.7 GB;
+  - the loss falls from 93 to ~26, and the equivariance terms fall (positions 1.28 → 0.35, Jacobians 0.69 → 0.49).
+  - Early samples: the prediction already looks like B, because the identity background explains most pixels. The keypoints still sit mid-arena and on the metal cylinder (the "mice are small" risk above); it is too early to judge.
+
+### First full runs (queued on RunPod, seed 1)
+`CalMS21_warp_clean_s1`, `CalMS21_warp_pg_ssim98_s1` and `CalMS21_warp_pg_ssim95_s1`, ~1.5 h each on the 4090. They are compared with the BKinD runs at the same settings (clean works; 0.98 partly works; 0.95 collapsed).
