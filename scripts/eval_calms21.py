@@ -196,7 +196,8 @@ def main():
     summary = a.summary or os.path.join(a.runs, 'eval_summary.tsv')
 
     items = list_frames(a.data, a.stride)
-    kp = np.load(os.path.join(a.data, 'keypoints.npz'))
+    z = np.load(os.path.join(a.data, 'keypoints.npz'))
+    kp = {f'{v}/keypoints': z[f'{v}/keypoints'] for v in {v for v, *_ in items}}  # npz re-reads on every access
     videos = np.array([v for v, *_ in items])
     gt_px = np.stack([kp[f'{v}/keypoints'][f] for v, f, *_ in items]).transpose(0, 1, 3, 2)  # (N, 2, 7, 2)
     # mouse length = median over the video of the nose-to-tail-base distance, per mouse
