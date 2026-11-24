@@ -131,11 +131,15 @@ class WarpLoss:
                     total = total + ((err.mean(1, keepdim=True) * w).sum((1, 2, 3)) / w.sum((1, 2, 3))).mean()
         return total
 
-    def __call__(self, out, driving, transform, source=None):
+    def __call__(self, out, driving, transform, source=None, mask=None):
         """Returns (total loss, dict of the parts for logging). source (frame A) is needed for the
-        motion weight."""
+        two-frame motion weight. mask (N, 1, H, W) in [0, 1] = the loader's background-subtraction
+        mask (config motion_mask); when given it replaces the two-frame weight, with the same floor."""
         weight = None
-        if self.motion:
+        if mask is not None:
+            weight = self.motion_floor + (1 - self.motion_floor) * mask.float()
+            self.last_weight = weight
+        elif self.motion:
             assert source is not None, 'warp_motion_weight needs frame A (source)'
             weight = motion_weight(source, driving, self.motion_sigma, self.motion_tau, self.motion_floor)
             self.last_weight = weight

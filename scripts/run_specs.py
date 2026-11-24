@@ -58,6 +58,16 @@ def warp_motion_sep(run, weight=100.0):
     return dict(run, name=run['name'].replace('CalMS21_warpm_', 'CalMS21_warpms_', 1), overrides=overrides)
 
 
+def bg_mask(run, sigma=2.0, tau=0.1, step=60, window=600, seg=300):
+    """Loss only where frame A or B differs from the local background (per-pixel median of nearby
+    noisy frames; dataloader/background.py). Works for BKinD and warp runs:
+    bg_mask(bench('pg', 95, 1)) -> CalMS21_bgm_pg_ssim95_s1 (BKinD),
+    bg_mask(warp(clean(1))) -> CalMS21_bgm_warp_clean_s1 (replaces the two-frame weight; floor 0.05)."""
+    overrides = dict(run.get('overrides', {}),
+                     motion_mask=dict(sigma=sigma, tau=tau, step=step, window=window, seg=seg))
+    return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_bgm_', 1), overrides=overrides)
+
+
 def clean(seed):
     return dict(name=f'CalMS21_clean_s{seed}', seed=seed)
 

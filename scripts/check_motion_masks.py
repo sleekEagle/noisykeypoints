@@ -24,7 +24,7 @@ from PIL import Image
 from scipy.ndimage import gaussian_filter
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'third_party', 'BKinD'))
-from dataloader.background import compute_background, foreground, load_gray, video_frames  # noqa: E402
+from dataloader.background import background_for, compute_backgrounds, foreground, load_gray, video_frames  # noqa: E402
 from dataloader.noise import BENCH_LEVELS  # noqa: E402
 
 NOISES = {'clean': None,
@@ -39,8 +39,8 @@ def frame_no(path):
 
 
 def bg_job(args):
-    video_dir, noise_name = args
-    return os.path.basename(video_dir), noise_name, compute_background(video_dir, NOISES[noise_name])
+    video_dir, noise_name, window = args
+    return os.path.basename(video_dir), noise_name, compute_backgrounds(video_dir, NOISES[noise_name], window=window)
 
 
 def two_frame_weight(a, b):
@@ -53,6 +53,8 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--pairs', type=int, default=200)
     ap.add_argument('--workers', type=int, default=6)
+    ap.add_argument('--window', type=int, default=600, help='local background: +- frames')
+    ap.add_argument('--noises', nargs='+', default=list(NOISES))
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     videos = sorted(d for d in os.listdir(a.data) if os.path.isdir(os.path.join(a.data, d)))
@@ -60,10 +62,11 @@ def main():
 
     with Pool(a.workers) as pool:
         bgs = {}
-        for v, n, bg in pool.imap_unordered(bg_job, [(os.path.join(a.data, v), n) for v in videos for n in NOISES]):
+        for v, n, bg in pool.imap_unordered(bg_job, [(os.path.join(a.data, v), n, a.window) for v in videos for n in a.noises]):
             bgs[(v, n)] = bg
-    for n in NOISES:
-        Image.fromarray((bgs[(videos[0], n)] * 255).astype(np.uint8)).save(f'{a.out}/background_{videos[0]}_{n}.png')
+    for n in a.noises:
+        Image.fromarray((bgs[(videos[0], n)]['bgs'][0].astype(np.float32) * 255).astype(np.uint8)).save(
+            f'{a.out}/background_{videos[0]}_{n}.png')
 
     rng = np.random.default_rng(0)
     pairs = []
@@ -75,14 +78,15 @@ def main():
         pairs.append((v, frames[f], frames[f + 6], f))
 
     yy, xx = np.mgrid[0:S, 0:S]
-    stats, rows = {}, {n: [] for n in NOISES}
+    stats, rows = {}, {n: [] for n in a.noises}
     clean_masks = []
-    for n in NOISES:
+    for n in a.noises:
         rec = {'mask': [[], []], 'two_frame': [[], []]}
         area, far, iou = [], [], []
         for j, (v, pa, pb, f) in enumerate(pairs):
             A, B = load_gray(pa, NOISES[n]), load_gray(pb, NOISES[n])
-            mA, mB = foreground(A, bgs[(v, n)]), foreground(B, bgs[(v, n)])
+            bg = background_for(bgs[(v, n)], f)
+            mA, mB = foreground(A, bg), foreground(B, bg)
             m = np.maximum(mA, mB)
             w2 = two_frame_weight(A, B)
             pts = kp[f'{v}/keypoints'][f]  # (mouse, xy, 7)
@@ -100,15 +104,15 @@ def main():
                 c, k = clean_masks[j], m > 0.5
                 iou.append(float((c & k).sum() / max(1, (c | k).sum())))
             if j < 4:
-                rows[n].append(np.concatenate([A, bgs[(v, n)], mA, m, w2], 1))
+                rows[n].append(np.concatenate([A, bg, mA, m, w2], 1))
         stats[n] = dict(mask_area=np.mean(area), false_alarm_far=np.mean(far),
                         recall_black_mask=np.mean(rec['mask'][0]), recall_white_mask=np.mean(rec['mask'][1]),
                         recall_black_two_frame=np.mean(rec['two_frame'][0]),
                         recall_white_two_frame=np.mean(rec['two_frame'][1]),
                         iou_with_clean=np.mean(iou) if iou else 1.0)
         Image.fromarray((np.concatenate(rows[n], 0) * 255).astype(np.uint8)).save(f'{a.out}/masks_{n}.png')
-        print(n, ' '.join(f'{k} {v:.3f}' for k, v in stats[n].items()), flush=True)
-    json.dump(stats, open(f'{a.out}/masks.json', 'w'), indent=1)
+        print(f'window {a.window}', n, ' '.join(f'{k} {v:.3f}' for k, v in stats[n].items()), flush=True)
+    json.dump(dict(window=a.window, stats=stats), open(f'{a.out}/masks.json', 'w'), indent=1)
     print('pictures: columns = frame A, background, mask of A, mask of the pair, two-frame weight')
 
 

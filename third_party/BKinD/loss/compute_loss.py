@@ -43,6 +43,13 @@ class computeLoss:
         amp = bool(getattr(self.args, 'amp', False))
         output = _to_float(output)
         to_pred = compute_ssim(inputs.float(), tr_inputs.float())
+        if getattr(self.args, 'motion_mask', None):
+            # noisykeypoints: background-subtraction mask (dataloader/background.py). BKinD sums the
+            # masked error over all pixels, so a mask covering ~10% of the picture would shrink the
+            # reconstruction loss ~10x next to the rotation and separation terms. Rescale each image's
+            # mask to mean 1 (at most 50x, for pairs where almost nothing is foreground).
+            loss_mask = loss_mask.float()
+            loss_mask = loss_mask / loss_mask.mean((1, 2, 3), keepdim=True).clamp(min=0.02)
 
         with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
             vgg_feat_in = self.loss_model(to_pred)

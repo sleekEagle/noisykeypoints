@@ -3,6 +3,7 @@ from __future__ import print_function, absolute_import
 import os
 import os.path
 
+import numpy as np
 import torch
 import torch.utils.data as data
 import torchvision
@@ -11,6 +12,7 @@ import torchvision.transforms.functional as TF
 
 from dataloader.data_utils import *
 from dataloader.noise import apply_noise_pair
+from dataloader import background as bgsub
 
 
 def generate_pair_images(root, gap=6, win_gap = 7):
@@ -50,10 +52,21 @@ class MouseDataset(data.Dataset):
 
     def __init__(self, root, transform=None, target_transform=None,
                  loader=default_loader, image_size=[128, 128], rotation=True,
-                 simplified=False, crop_box=True, noise=None):
+                 simplified=False, crop_box=True, noise=None, motion_mask=None):
 
         samples = generate_pair_images(root)
         self.noise = noise  # noisykeypoints: see dataloader/noise.py (None = clean)
+        # noisykeypoints: motion_mask = dict(sigma=2, tau=0.1, step=60, window=600, seg=300) or None.
+        # The background of each stretch of video is the per-pixel median of nearby (noisy) frames; the
+        # loss mask of a pair is where frame A or B differs from it (dataloader/background.py).
+        # None = BKinD's all-ones mask.
+        self.motion_mask = dict(motion_mask) if motion_mask else None
+        self.backgrounds = None
+        if self.motion_mask:
+            m = self.motion_mask
+            self.backgrounds = bgsub.background_cache(root, noise, int(m.get('step', 60)),
+                                                      int(m.get('window', 600)), int(m.get('seg', 300)))
+            print(f'motion mask: backgrounds of {len(self.backgrounds)} videos ready', flush=True)
 
         self.root = root
         self.loader = loader
@@ -95,6 +108,13 @@ class MouseDataset(data.Dataset):
         # Done as a pair so that H.264 can encode A and B together (A = I-frame, B = P-frame).
         image0, image1 = apply_noise_pair([image0, image1], self.noise, [img_path0, img_path1])
 
+        if self.backgrounds is not None:  # noisykeypoints: where A or B differs from the background
+            bg = bgsub.background_for(self.backgrounds[os.path.basename(os.path.dirname(img_path0))],
+                                      bgsub.frame_no(img_path0))
+            sigma, tau = float(self.motion_mask.get('sigma', 2.0)), float(self.motion_mask.get('tau', 0.1))
+            masks = [bgsub.foreground(bgsub.to_gray(im), bg, sigma, tau) for im in (image0, image1)]
+            motion = torch.from_numpy(np.maximum(*masks)).float().unsqueeze(0)
+
         # Create 3 rotations
         deg = 90
         rot_image1 = TF.rotate(image1, deg)
@@ -114,8 +134,9 @@ class MouseDataset(data.Dataset):
             image1 = self.target_transform(image1)
 
         mask = torch.ones((1, height, width))
+        loss_mask = motion if self.backgrounds is not None else mask  # noisykeypoints
 
-        return (image0, image1, mask, mask, rot_image1, rot_image2, rot_image3, img_path0, img_path1)
+        return (image0, image1, loss_mask, mask, rot_image1, rot_image2, rot_image3, img_path0, img_path1)
 
 
     def __len__(self):

@@ -51,6 +51,8 @@ def load_dataloader(args):
         valdir = os.path.join(args.data)
         noise = getattr(args, 'noise', None)  # noisykeypoints: on-the-fly corruption (dataloader/noise.py)
         print('noise:', noise)
+        motion_mask = getattr(args, 'motion_mask', None)  # noisykeypoints: dataloader/background.py
+        print('motion mask:', motion_mask)
 
         train_dataset = mouse.MouseDataset(traindir, transforms.Compose([
                               transforms.Resize(args.image_size),
@@ -63,7 +65,7 @@ def load_dataloader(args):
                               transforms.ToTensor(),
                               normalize,]),
                               image_size=[args.image_size, args.image_size],
-                              loader=loader, noise=noise)
+                              loader=loader, noise=noise, motion_mask=motion_mask)
 
         val_dataset = mouse.MouseDataset(valdir, transforms.Compose([
                               transforms.Resize(args.image_size),
