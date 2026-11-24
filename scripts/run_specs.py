@@ -29,10 +29,24 @@ def warp(run):
     return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_warp_', 1), base_config='CalMS21_warp.yaml')
 
 
-def warp_motion(run):
+def warp_motion(run, tau=None, floor=None):
     """Step 1b: warping with the reconstruction loss weighted by where things move
-    (config CalMS21_warp_motion.yaml): warp_motion(clean(1)) -> CalMS21_warpm_clean_s1."""
-    return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_warpm_', 1), base_config='CalMS21_warp_motion.yaml')
+    (config CalMS21_warp_motion.yaml): warp_motion(clean(1)) -> CalMS21_warpm_clean_s1.
+    tau / floor change the motion weight's 'full motion' threshold (default 0.05) and the weight of
+    still pixels (default 0.05); they go into the name, e.g. warp_motion(clean(1), tau=0.02, floor=0.01)
+    -> CalMS21_warpm_t02f01_clean_s1."""
+    tag, overrides = '', dict(run.get('overrides', {}))
+    if tau is not None:
+        tag += f't{round(tau * 100):02d}'
+        overrides['warp_motion_tau'] = tau
+    if floor is not None:
+        tag += f'f{round(floor * 100):02d}'
+        overrides['warp_motion_floor'] = floor
+    prefix = 'CalMS21_warpm_' + (tag + '_' if tag else '')
+    out = dict(run, name=run['name'].replace('CalMS21_', prefix, 1), base_config='CalMS21_warp_motion.yaml')
+    if overrides:
+        out['overrides'] = overrides
+    return out
 
 
 def warp_motion_sep(run, weight=100.0):
