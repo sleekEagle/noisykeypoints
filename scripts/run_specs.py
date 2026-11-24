@@ -58,6 +58,22 @@ def warp_motion_sep(run, weight=100.0):
     return dict(run, name=run['name'].replace('CalMS21_warpm_', 'CalMS21_warpms_', 1), overrides=overrides)
 
 
+def warp_track(run, weight=None):
+    """Step 1d: step 1b + the point-track loss (config CalMS21_warp_track.yaml; needs tracks precomputed
+    for the run's noise by scripts/precompute_tracks.py): warp_track(bench('pg', 95, 1)) ->
+    CalMS21_warpt_pg_ssim95_s1. weight overrides warp_track_weight (default 100) and goes into the name."""
+    overrides = dict(run.get('overrides', {}))
+    tag = ''
+    if weight is not None:
+        overrides['warp_track_weight'] = weight
+        tag = f'w{weight:g}_'
+    out = dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_warpt_{tag}', 1),
+               base_config='CalMS21_warp_track.yaml')
+    if overrides:
+        out['overrides'] = overrides
+    return out
+
+
 def bg_mask(run, sigma=2.0, tau=0.1, step=60, window=600, seg=300):
     """Loss only where frame A or B differs from the local background (per-pixel median of nearby
     noisy frames; dataloader/background.py). Works for BKinD and warp runs:

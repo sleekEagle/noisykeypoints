@@ -87,7 +87,7 @@ class Transform:
 
 class WarpLoss:
     """Reconstruction (multi-scale VGG perceptual, L1) + keypoint and Jacobian equivariance
-    (+ optional BKinD separation). Weights come from the config (args)."""
+    (+ optional BKinD separation, + optional point-track loss). Weights come from the config (args)."""
 
     def __init__(self, args):
         self.args = args
@@ -104,6 +104,9 @@ class WarpLoss:
         self.motion_sigma = float(getattr(args, 'warp_motion_sigma', 4.0))
         self.motion_tau = float(getattr(args, 'warp_motion_tau', 0.05))
         self.motion_floor = float(getattr(args, 'warp_motion_floor', 0.05))
+        # step 1d: the warp must carry each moving tracked point of frame B back to where CoTracker3
+        # found it in frame A (precomputed tracks, dataloader/tracks.py); 0 = off
+        self.w_track = float(getattr(args, 'warp_track_weight', 0.0))
         self.last_weight = None  # the latest weight map, for the sample pictures
         self.vgg = torch.nn.DataParallel(VGG_feat()).cuda(args.gpu).eval()
         for p in self.vgg.parameters():
@@ -131,7 +134,21 @@ class WarpLoss:
                     total = total + ((err.mean(1, keepdim=True) * w).sum((1, 2, 3)) / w.sum((1, 2, 3))).mean()
         return total
 
-    def __call__(self, out, driving, transform, source=None, mask=None):
+    @staticmethod
+    def track_error(deformation, tracks):
+        """Mean L1 distance (in [-1, 1] units; 1 px at 256 px = 0.0078) between where the predicted
+        deformation sends each tracked point of frame B and where the tracker found it in frame A.
+        deformation (N, h, w, 2): for each pixel of B, where to sample A. tracks (N, P, 5): x_A, y_A,
+        x_B, y_B, valid. Returns (error, number of valid points)."""
+        flow = deformation.float().permute(0, 3, 1, 2)  # (N, 2, h, w)
+        pts_b = tracks[:, :, 2:4].float().unsqueeze(1)   # (N, 1, P, 2)
+        pred_a = F.grid_sample(flow, pts_b, align_corners=True, padding_mode='border')[:, :, 0].permute(0, 2, 1)
+        valid = tracks[:, :, 4].float()
+        err = (pred_a - tracks[:, :, 0:2].float()).abs().sum(-1)  # (N, P)
+        n = valid.sum()
+        return (err * valid).sum() / n.clamp(min=1.0), n
+
+    def __call__(self, out, driving, transform, source=None, mask=None, tracks=None):
         """Returns (total loss, dict of the parts for logging). source (frame A) is needed for the
         two-frame motion weight. mask (N, 1, H, W) in [0, 1] = the loader's background-subtraction
         mask (config motion_mask); when given it replaces the two-frame weight, with the same floor."""
@@ -154,6 +171,9 @@ class WarpLoss:
                 rel = safe_inverse_2x2(kp_d['jacobian']) @ jac_t
                 eye = torch.eye(2, device=rel.device).view(1, 1, 2, 2)
                 parts['equivariance_jacobian'] = self.w_eq_jac * (eye - rel).abs().mean()
+        if self.w_track and tracks is not None:
+            err, _ = self.track_error(out['deformation'], tracks)
+            parts['track'] = self.w_track * err
         if self.w_sep:
             for kp in (out['kp_source'], out['kp_driving']):
                 parts['separation'] = parts.get('separation', 0.0) + self.w_sep * self.separation(

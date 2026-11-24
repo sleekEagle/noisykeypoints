@@ -231,8 +231,11 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
             transformed = transform.transform_frame(tr_inputs)
             with torch.autocast('cuda', dtype=torch.float16, enabled=args.amp):
                 out = model(inputs, tr_inputs, transformed)
+            # images[9] = precomputed point tracks of the pair, when the config has `tracks`
+            tracks = images[9].cuda(args.gpu, non_blocking=True) if len(images) > 9 else None
             loss, parts = loss_module(out, tr_inputs, transform, source=inputs,
-                                      mask=loss_mask if getattr(args, 'motion_mask', None) else None)
+                                      mask=loss_mask if getattr(args, 'motion_mask', None) else None,
+                                      tracks=tracks)
             losses.update(loss.item(), images[0].size(0))
             for name, value in parts.items():
                 part_meters.setdefault(name, AverageMeter(name, ':.4f')).update(float(value), images[0].size(0))

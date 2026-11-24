@@ -53,6 +53,7 @@ def load_dataloader(args):
         print('noise:', noise)
         motion_mask = getattr(args, 'motion_mask', None)  # noisykeypoints: dataloader/background.py
         print('motion mask:', motion_mask)
+        tracks = getattr(args, 'tracks', None)  # noisykeypoints: dataloader/tracks.py (warp track loss)
 
         train_dataset = mouse.MouseDataset(traindir, transforms.Compose([
                               transforms.Resize(args.image_size),
@@ -65,7 +66,7 @@ def load_dataloader(args):
                               transforms.ToTensor(),
                               normalize,]),
                               image_size=[args.image_size, args.image_size],
-                              loader=loader, noise=noise, motion_mask=motion_mask)
+                              loader=loader, noise=noise, motion_mask=motion_mask, tracks=tracks)
 
         val_dataset = mouse.MouseDataset(valdir, transforms.Compose([
                               transforms.Resize(args.image_size),

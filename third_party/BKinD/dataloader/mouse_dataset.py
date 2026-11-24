@@ -13,6 +13,7 @@ import torchvision.transforms.functional as TF
 from dataloader.data_utils import *
 from dataloader.noise import apply_noise_pair
 from dataloader import background as bgsub
+from dataloader.tracks import TrackStore
 
 
 def generate_pair_images(root, gap=6, win_gap = 7):
@@ -52,7 +53,7 @@ class MouseDataset(data.Dataset):
 
     def __init__(self, root, transform=None, target_transform=None,
                  loader=default_loader, image_size=[128, 128], rotation=True,
-                 simplified=False, crop_box=True, noise=None, motion_mask=None):
+                 simplified=False, crop_box=True, noise=None, motion_mask=None, tracks=None):
 
         samples = generate_pair_images(root)
         self.noise = noise  # noisykeypoints: see dataloader/noise.py (None = clean)
@@ -67,6 +68,13 @@ class MouseDataset(data.Dataset):
             self.backgrounds = bgsub.background_cache(root, noise, int(m.get('step', 60)),
                                                       int(m.get('window', 600)), int(m.get('seg', 300)))
             print(f'motion mask: backgrounds of {len(self.backgrounds)} videos ready', flush=True)
+
+        # noisykeypoints: tracks = dict(dir=..., max_points=256) or None. Precomputed CoTracker3 tracks of
+        # the moving points of each pair (dataloader/tracks.py), for the warp model's track loss.
+        self.tracks = None
+        if tracks:
+            self.tracks = TrackStore(tracks['dir'], noise, tracks.get('max_points', 256))
+            print(f'tracks: {self.tracks.dir}', flush=True)
 
         self.root = root
         self.loader = loader
@@ -136,7 +144,10 @@ class MouseDataset(data.Dataset):
         mask = torch.ones((1, height, width))
         loss_mask = motion if self.backgrounds is not None else mask  # noisykeypoints
 
-        return (image0, image1, loss_mask, mask, rot_image1, rot_image2, rot_image3, img_path0, img_path1)
+        out = (image0, image1, loss_mask, mask, rot_image1, rot_image2, rot_image3, img_path0, img_path1)
+        if self.tracks is not None:  # noisykeypoints: (max_points, 5) = A xy, B xy in [-1, 1], valid
+            out = out + (self.tracks.get(os.path.basename(os.path.dirname(img_path0)), bgsub.frame_no(img_path0)),)
+        return out
 
 
     def __len__(self):
