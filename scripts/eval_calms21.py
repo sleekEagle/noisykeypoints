@@ -121,15 +121,16 @@ def extract(ckpt_path, items, noise, nkpts, batch, workers):
     if missing:
         raise RuntimeError(f'{len(missing)} detector weights not in checkpoint, e.g. {missing[:3]}')
     model.load_state_dict(loaded)
-    model = model.cuda().eval()
+    dev = os.environ.get('EVAL_DEVICE', 'cuda')  # EVAL_DEVICE=cpu when training fills the GPU
+    model = model.to(dev).eval()
     print(f'loaded {len(loaded)} tensors from {ckpt_path} (epoch {ck.get("epoch")}, method {ck.get("method", "bkind")})',
           flush=True)
     dl = torch.utils.data.DataLoader(Frames(items, noise), batch_size=batch, num_workers=workers)
     ks, cs = [], []
     t0 = time.time()
-    with torch.no_grad(), torch.autocast('cuda', dtype=torch.float16):
+    with torch.no_grad(), torch.autocast(dev, dtype=torch.float16 if dev == 'cuda' else torch.bfloat16):
         for i, x in enumerate(dl):
-            out = model(x.cuda(non_blocking=True))
+            out = model(x.to(dev, non_blocking=True))
             ks.append(torch.stack(out[0], dim=-1).float().cpu().numpy())
             cs.append(out[5].float().cpu().numpy())
             if i % 50 == 0:
