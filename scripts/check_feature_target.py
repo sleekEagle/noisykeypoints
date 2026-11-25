@@ -26,10 +26,10 @@ MEAN = np.array([0.485, 0.456, 0.406]).reshape(1, 3, 1, 1)
 STD = np.array([0.229, 0.224, 0.225]).reshape(1, 3, 1, 1)
 
 
-def feat(a, b, size):
+def feat(a, b, size, pool=1):
     x = np.stack([a, b])[:, None].repeat(3, 1)  # grey -> 3 channels
     x = torch.from_numpy(((x - MEAN) / STD).astype(np.float32)).cuda()
-    return feature_target(x[:1], x[1:], size)[0, 0].cpu().numpy()
+    return feature_target(x[:1], x[1:], size, pool=pool)[0, 0].cpu().numpy()
 
 
 def main():
@@ -38,6 +38,7 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--pairs', type=int, default=100)
     ap.add_argument('--sizes', type=int, nargs='+', default=[256, 384])
+    ap.add_argument('--pools', type=int, nargs='+', default=[1], help='feature pooling (pyramid level) per size')
     ap.add_argument('--noises', nargs='+', default=['clean', 'pg98', 'pg95', 'pg90', 'sp95', 'blur95'])
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -45,7 +46,7 @@ def main():
     videos = sorted(d for d in os.listdir(a.data) if os.path.isdir(os.path.join(a.data, d)))
     rng = np.random.default_rng(0)
     yy, xx = np.mgrid[0:S, 0:S]
-    cands = ['bkind', 'ds4'] + [f'feat{s}' for s in a.sizes]
+    cands = ['bkind', 'ds4'] + [f'feat{s}_p{p}' for s in a.sizes for p in a.pools]
     acc = {(n, c): [] for n in a.noises for c in cands}
     for j in range(a.pairs):
         v = videos[rng.integers(len(videos))]
@@ -60,7 +61,8 @@ def main():
             ia, ib = load_pair(frames[f], frames[f + 6], NOISES[n])
             maps = dict(bkind=bkind_target(ia, ib), ds4=up(bkind_target(down(ia, 4), down(ib, 4)), 4))
             for s in a.sizes:
-                maps[f'feat{s}'] = feat(ia, ib, s)
+                for p in a.pools:
+                    maps[f'feat{s}_p{p}'] = feat(ia, ib, s, p)
             if n == 'clean':
                 clean_maps = maps
             for c, t in maps.items():
@@ -70,7 +72,7 @@ def main():
                                         corr=float(np.corrcoef(x, y)[0, 1]) if y.std() > 0 else float('nan')))
         if (j + 1) % 25 == 0:
             print(f'{j + 1}/{a.pairs} pairs', flush=True)
-    lines = [f"{'noise':8s} {'target':8s} {'ratio':>7s} {'auc':>6s} {'corr':>6s} {'mice':>7s} {'still':>7s}"]
+    lines = [f"{'noise':8s} {'target':12s} {'ratio':>7s} {'auc':>6s} {'corr':>6s} {'mice':>7s} {'still':>7s}"]
     table = {}
     for n in a.noises:
         for c in cands:
@@ -78,7 +80,7 @@ def main():
             m, s_ = np.mean([x['mice'] for x in r]), np.mean([x['still'] for x in r])
             t = table[f'{n}/{c}'] = dict(mice=m, still=s_, ratio=m / max(s_, 1e-4), auc=np.mean([x['auc'] for x in r]),
                                          corr=np.nanmean([x['corr'] for x in r]))
-            lines.append(f"{n:8s} {c:8s} {t['ratio']:7.1f} {t['auc']:6.3f} {t['corr']:6.3f} {m:7.4f} {s_:7.4f}")
+            lines.append(f"{n:8s} {c:12s} {t['ratio']:7.1f} {t['auc']:6.3f} {t['corr']:6.3f} {m:7.4f} {s_:7.4f}")
     print('\n'.join(lines))
     open(f'{a.out}/feature_target.txt', 'w').write('\n'.join(lines) + '\n')
     json.dump(dict(pairs=a.pairs, table=table), open(f'{a.out}/feature_target.json', 'w'), indent=1)

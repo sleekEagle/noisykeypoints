@@ -38,14 +38,17 @@ def cotracker_encoder(device):
 
 
 @torch.no_grad()
-def feature_target(inputs, tr_inputs, size=384, gain=1.0):
-    """inputs, tr_inputs: (B, 3, H, W) ImageNet-normalised frames. Returns (B, 3, H, W)."""
+def feature_target(inputs, tr_inputs, size=384, gain=1.0, pool=1):
+    """inputs, tr_inputs: (B, 3, H, W) ImageNet-normalised frames. Returns (B, 3, H, W).
+    pool > 1 averages the feature maps over pool x pool blocks first (like CoTracker3's pyramid levels)."""
     fnet = cotracker_encoder(inputs.device)
     mean = torch.tensor(_MEAN, device=inputs.device).view(1, 3, 1, 1)
     std = torch.tensor(_STD, device=inputs.device).view(1, 3, 1, 1)
     x = torch.cat([inputs.float(), tr_inputs.float()]) * std + mean           # [0, 1]
     x = F.interpolate(x, size=(int(size), int(size)), mode='bilinear', align_corners=False)
     f = F.normalize(fnet(2 * x - 1).float(), dim=1)
+    if int(pool) > 1:
+        f = F.normalize(F.avg_pool2d(f, int(pool)), dim=1)
     fa, fb = f.chunk(2)
     t = (1 - (fa * fb).sum(1, keepdim=True)).clamp(0, 1) * gain
     t = F.interpolate(t, size=inputs.shape[-2:], mode='bilinear', align_corners=False)
@@ -88,7 +91,8 @@ def change_target(args, inputs, tr_inputs, tracks=None):
     if kind == 'coarse':
         return coarse_target(inputs, tr_inputs, cfg.get('factor', 4))
     if kind == 'feature':
-        return feature_target(inputs, tr_inputs, cfg.get('size', 384), float(cfg.get('gain', 1.0)))
+        return feature_target(inputs, tr_inputs, cfg.get('size', 384), float(cfg.get('gain', 1.0)),
+                              int(cfg.get('pool', 1)))
     if kind == 'tracks':
         if tracks is None:
             raise ValueError('change_target tracks needs the `tracks` config (precomputed tracks)')
