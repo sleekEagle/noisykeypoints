@@ -101,7 +101,7 @@ def temporal(run, k=3, frames='/root/data/CalMS21_allframes/train'):
     """BKinD's change target built from the mean of k frames centred on A and on B (the network still sees
     single frames; dataloader/mouse_dataset.py). Combine with coarse_target for the shrunk version:
     temporal(coarse_target(bench('pg', 95, 1))) -> CalMS21_t3_ct4_pg_ssim95_s1. Needs every-frame data."""
-    overrides = dict(run.get('overrides', {}), temporal=dict(k=k, frames=frames))
+    overrides = dict(run.get('overrides', {}), temporal=dict(k=k, frames=frames), workers=6)
     return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_t{k}_', 1), overrides=overrides)
 
 

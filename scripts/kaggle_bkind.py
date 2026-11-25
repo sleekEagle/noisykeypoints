@@ -155,7 +155,7 @@ def make_configs(runs, config, split, out, train_hours, runs_per_gpu=1):
         run_base = yaml.safe_load(open(f'{BK}/config/{r["base_config"]}')) if r.get('base_config') else base
         cfg = dict(run_base, **r.get('overrides', {}))
         # 2 loader workers each: Kaggle has 4 CPUs, free Colab 2
-        cfg.update(data=split, checkpoint=r['dir'], gpu=0, workers=2,
+        cfg.update(data=split, checkpoint=r['dir'], gpu=0, workers=r.get('overrides', {}).get('workers', 2),
                    seed=r['seed'], max_hours=round(train_hours, 2))
         r['cfg'] = cfg
         r['config'] = f'{BK}/config/kaggle_{r["name"]}.yaml'
