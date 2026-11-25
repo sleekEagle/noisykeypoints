@@ -90,6 +90,13 @@ def coarse_target(run, factor=4):
     return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_ct{factor}_', 1), overrides=overrides)
 
 
+def feature_target(run, size=384, gain=1.0):
+    """BKinD whose decoder redraws the change in CoTracker3's frozen encoder features between A and B
+    (loss/change_target.py): feature_target(bench('pg', 95, 1)) -> CalMS21_ft_pg_ssim95_s1."""
+    overrides = dict(run.get('overrides', {}), change_target=dict(type='feature', size=size, gain=gain))
+    return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_ft_', 1), overrides=overrides)
+
+
 def bg_mask(run, sigma=2.0, tau=0.1, step=60, window=600, seg=300):
     """Loss only where frame A or B differs from the local background (per-pixel median of nearby
     noisy frames; dataloader/background.py). Works for BKinD and warp runs:
