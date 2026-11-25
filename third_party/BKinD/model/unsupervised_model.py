@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from .resnet_updated import conv3x3
 from .resnet_updated import resnetbank50all as resnetbank50
+from .multiframe import inflate_input
 from .globalNet import globalNet
 
 import math
@@ -84,8 +85,8 @@ class Decoder(nn.Module):
     
     
 class Model(nn.Module):
-    def __init__(self, n_kps=10, output_dim=200, pretrained=True, output_shape=(64, 64)):
-        
+    def __init__(self, n_kps=10, output_dim=200, pretrained=True, output_shape=(64, 64), n_frames=1):
+
         super(Model, self).__init__()
         self.K = n_kps
         
@@ -108,6 +109,7 @@ class Model(nn.Module):
                 nn.init.constant_(m.bias, 0)
         
         self.encoder = resnetbank50(pretrained=pretrained)
+        inflate_input(self.encoder, n_frames)  # noisykeypoints: model/multiframe.py
 
     def get_keypoints(self, x):
         x_res = self.encoder(x)

@@ -67,7 +67,8 @@ def load_dataloader(args):
                               normalize,]),
                               image_size=[args.image_size, args.image_size],
                               loader=loader, noise=noise, motion_mask=motion_mask, tracks=tracks,
-                              temporal=getattr(args, 'temporal', None))  # noisykeypoints: k-frame means
+                              temporal=getattr(args, 'temporal', None),  # noisykeypoints: k-frame means
+                              input_frames=getattr(args, 'input_frames', None))  # noisykeypoints: frame stacks
 
         val_dataset = mouse.MouseDataset(valdir, transforms.Compose([
                               transforms.Resize(args.image_size),
@@ -80,7 +81,7 @@ def load_dataloader(args):
                               transforms.ToTensor(),
                               normalize,]),
                               image_size=[args.image_size, args.image_size],
-                              loader=loader, noise=noise)
+                              loader=loader, noise=noise, input_frames=getattr(args, 'input_frames', None))
 
     elif args.dataset == 'custom_dataset':
         traindir = os.path.join(args.data, 'train')

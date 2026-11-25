@@ -90,31 +90,45 @@ def config_from_name(run):
 
 
 class Frames:
-    def __init__(self, items, noise):
+    """Frame A of each item (noised as in training). With input_frames = dict(k, step, frames), a stack of
+    k frames, oldest first, current frame last, built like dataloader/mouse_dataset.py _context."""
+    def __init__(self, items, noise, input_frames=None):
         self.items, self.noise = items, noise
+        self.ctx = input_frames if input_frames and int(input_frames.get('k', 1)) > 1 else None
 
     def __len__(self):
         return len(self.items)
 
     def __getitem__(self, i):
         import torch
-        _, _, pa, pb = self.items[i]
+        v, f, pa, pb = self.items[i]
         ims = [Image.open(p).convert('RGB').resize((S, S), Image.BILINEAR) for p in (pa, pb)]
-        im = apply_noise_pair(ims, self.noise, [pa, pb])[0] if self.noise else ims[0]
-        x = torch.from_numpy(np.asarray(im, dtype=np.float32) / 255.0).permute(2, 0, 1)
+        stack = [apply_noise_pair(ims, self.noise, [pa, pb])[0] if self.noise else ims[0]]
+        if self.ctx:
+            k, step = int(self.ctx['k']), int(self.ctx.get('step', 2))
+            paths = []
+            for g in range(f - step * (k - 1), f, step):
+                p = os.path.join(self.ctx['frames'], v, f'image_{max(g, 0):08d}.png')
+                paths.append(p if os.path.exists(p) else (paths[-1] if paths else pa))
+            c = [Image.open(p).convert('RGB').resize((S, S), Image.BILINEAR) for p in paths]
+            stack = (apply_noise_pair(c, self.noise, paths) if self.noise else c) + stack
         mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
         std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-        return (x - mean) / std
+        return torch.cat([(torch.from_numpy(np.asarray(im, dtype=np.float32) / 255.0).permute(2, 0, 1) - mean) / std
+                          for im in stack])
 
 
-def extract(ckpt_path, items, noise, nkpts, batch, workers):
+def extract(ckpt_path, items, noise, nkpts, batch, workers, input_frames=None):
     """Keypoints (N, K, 2) in [-1, 1] as (x, y), and confidence (N, K). BKinD and the warp model share
     the same encoder + globalNet + soft-argmax, so BKinD's keypoint-only Model loads both."""
     import torch
     from model.kpt_detector import Model
-    model = Model(nkpts, pretrained=False, output_shape=(S // 4, S // 4))
     ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     sd = {k[7:] if k.startswith('module.') else k: v for k, v in ck['state_dict'].items()}
+    n_frames = sd['encoder.conv1.weight'].shape[1] // 3 if 'encoder.conv1.weight' in sd else 1  # model/multiframe.py
+    if n_frames > 1 and int((input_frames or {}).get('k', 1)) != n_frames:
+        raise RuntimeError(f'checkpoint takes {n_frames} frames but the config has input_frames {input_frames}')
+    model = Model(nkpts, pretrained=False, output_shape=(S // 4, S // 4), n_frames=n_frames)
     md = model.state_dict()
     loaded = {k: v for k, v in sd.items() if k in md and v.shape == md[k].shape}
     missing = [k for k in md if k not in loaded]
@@ -125,7 +139,8 @@ def extract(ckpt_path, items, noise, nkpts, batch, workers):
     model = model.to(dev).eval()
     print(f'loaded {len(loaded)} tensors from {ckpt_path} (epoch {ck.get("epoch")}, method {ck.get("method", "bkind")})',
           flush=True)
-    dl = torch.utils.data.DataLoader(Frames(items, noise), batch_size=batch, num_workers=workers)
+    dl = torch.utils.data.DataLoader(Frames(items, noise, input_frames if n_frames > 1 else None),
+                                     batch_size=batch, num_workers=workers)
     ks, cs = [], []
     t0 = time.time()
     with torch.no_grad(), torch.autocast(dev, dtype=torch.float16 if dev == 'cuda' else torch.bfloat16):
@@ -228,7 +243,7 @@ def main():
                 print(f'WARNING: no config for {run}; scoring on clean frames', flush=True)
             print(f'== {run}: noise {noise} ({cfg_path})', flush=True)
             X, conf, epoch, method = extract(os.path.join(a.runs, run, 'checkpoint.pth.tar'), items, noise,
-                                             a.nkpts, a.batch, a.workers)
+                                             a.nkpts, a.batch, a.workers, (cfg or {}).get('input_frames'))
         elif a.source == 'gt':
             X = Y
         else:

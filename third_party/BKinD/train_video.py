@@ -16,6 +16,7 @@ from config.config_reader import parse_args, create_parser
 from dataloader.load_dataloader import load_dataloader
 
 from model.unsupervised_model import Model
+from model.multiframe import n_input_frames  # noisykeypoints
 from model.warp_model import WarpModel  # noisykeypoints: our method (method: warp)
 
 from loss.compute_loss import *
@@ -68,7 +69,8 @@ def main_worker(gpu, ngpus_per_node, args):
     if args.method == 'warp':
         model = WarpModel(args.nkpts, output_shape=output_shape)
     else:
-        model = Model(args.nkpts, output_shape=output_shape)
+        # noisykeypoints: `input_frames` = the keypoint network sees k frames (model/multiframe.py)
+        model = Model(args.nkpts, output_shape=output_shape, n_frames=n_input_frames(args))
 
     if args.gpu is not None:
         torch.cuda.set_device(args.gpu)
@@ -268,6 +270,9 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
                 output = model(inputs, tr_inputs)
             else:
                 output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
+        # noisykeypoints: with `input_frames` the inputs are stacks of k frames (current frame last);
+        # the loss and the change target use the current frames only.
+        inputs, tr_inputs = inputs[:, -3:], tr_inputs[:, -3:]
 
         # noisykeypoints: images[9] = precomputed point tracks when the config has `tracks`
         tracks = images[9].cuda(args.gpu, non_blocking=True) if getattr(args, 'tracks', None) else None
@@ -338,7 +343,7 @@ def validate(val_loader, model, loss_module, epoch, args):
             with torch.autocast('cuda', dtype=torch.float16, enabled=args.amp):
                 output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
             # Note that validate function only computes MSE loss
-            loss = loss_module.criterion[1](output[0].float() * loss_mask, tr_inputs * loss_mask)
+            loss = loss_module.criterion[1](output[0].float() * loss_mask, tr_inputs[:, -3:] * loss_mask)
 
             losses.update(loss.item(), images[0].size(0))
 

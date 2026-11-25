@@ -105,6 +105,14 @@ def temporal(run, k=3, frames='/root/data/CalMS21_allframes/train'):
     return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_t{k}_', 1), overrides=overrides)
 
 
+def multi_frame(run, k=3, step=2, frames='/root/data/CalMS21_allframes/train'):
+    """The keypoint network sees k frames: the current one and k-1 earlier ones, `step` frames apart
+    (model/multiframe.py; needs every-frame data). Combine with coarse_target:
+    multi_frame(coarse_target(bench('pg', 95, 1))) -> CalMS21_mf3_ct4_pg_ssim95_s1."""
+    overrides = dict(run.get('overrides', {}), input_frames=dict(k=k, step=step, frames=frames), workers=6)
+    return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_mf{k}_', 1), overrides=overrides)
+
+
 def bg_mask(run, sigma=2.0, tau=0.1, step=60, window=600, seg=300):
     """Loss only where frame A or B differs from the local background (per-pixel median of nearby
     noisy frames; dataloader/background.py). Works for BKinD and warp runs:

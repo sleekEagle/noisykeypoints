@@ -53,7 +53,8 @@ class MouseDataset(data.Dataset):
 
     def __init__(self, root, transform=None, target_transform=None,
                  loader=default_loader, image_size=[128, 128], rotation=True,
-                 simplified=False, crop_box=True, noise=None, motion_mask=None, tracks=None, temporal=None):
+                 simplified=False, crop_box=True, noise=None, motion_mask=None, tracks=None, temporal=None,
+                 input_frames=None):
 
         samples = generate_pair_images(root)
         self.noise = noise  # noisykeypoints: see dataloader/noise.py (None = clean)
@@ -81,6 +82,12 @@ class MouseDataset(data.Dataset):
         # (loss/change_target.py); the network still sees single frames. Neighbours past the video's ends
         # are left out.
         self.temporal = dict(temporal) if temporal else None
+
+        # noisykeypoints: input_frames = dict(k=3, step=2, frames=<every-frame folder>) or None. Frames A and B
+        # (and B's rotations) become stacks of k frames, oldest first, current frame last: t - step*(k-1), ...,
+        # t - step, t (model/multiframe.py). Earlier frames come from the every-frame folder, noised as in
+        # training; before the video's start the earliest frame is repeated.
+        self.input_frames = dict(input_frames) if input_frames and int(input_frames.get('k', 1)) > 1 else None
 
         self.root = root
         self.loader = loader
@@ -147,6 +154,14 @@ class MouseDataset(data.Dataset):
         if self.target_transform is not None:
             image1 = self.target_transform(image1)
 
+        if self.input_frames is not None:  # noisykeypoints: stacks of k frames, current frame last
+            c0, c1 = self._context(img_path0, height, width), self._context(img_path1, height, width)
+            image0 = torch.cat([self.transform(c) for c in c0] + [image0])
+            image1 = torch.cat([self.target_transform(c) for c in c1] + [image1])
+            rot_image1, rot_image2, rot_image3 = (
+                torch.cat([self.target_transform(TF.rotate(c, deg)) for c in c1] + [r])
+                for deg, r in ((90, rot_image1), (180, rot_image2), (-90, rot_image3)))
+
         mask = torch.ones((1, height, width))
         loss_mask = motion if self.backgrounds is not None else mask  # noisykeypoints
 
@@ -156,6 +171,17 @@ class MouseDataset(data.Dataset):
         if self.temporal is not None:  # noisykeypoints: last two items = k-frame means around A and B
             out = out + tuple(self._frame_mean(p, height, width) for p in (img_path0, img_path1))
         return out
+
+    def _context(self, path, height, width):
+        """noisykeypoints: the k-1 earlier frames of `path` (oldest first), resized and noised, as PIL images."""
+        video, f = os.path.basename(os.path.dirname(path)), bgsub.frame_no(path)
+        k, step = int(self.input_frames['k']), int(self.input_frames.get('step', 2))
+        paths = []
+        for g in range(f - step * (k - 1), f, step):
+            p = os.path.join(self.input_frames['frames'], video, f'image_{max(g, 0):08d}.png')
+            paths.append(p if os.path.exists(p) else (paths[-1] if paths else path))
+        ims = [torchvision.transforms.Resize((height, width))(self.loader(p)) for p in paths]
+        return apply_noise_pair(ims, self.noise, paths)
 
     def _frame_mean(self, path, height, width):
         """noisykeypoints: mean of the k noisy frames centred on `path`, normalised like the frames."""
