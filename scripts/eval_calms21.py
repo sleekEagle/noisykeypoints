@@ -207,6 +207,8 @@ def main():
     ap.add_argument('--nkpts', type=int, default=10)
     ap.add_argument('--batch', type=int, default=64)
     ap.add_argument('--workers', type=int, default=8)
+    ap.add_argument('--keypoints', default=None, help='npz with kpts (N, K, 2) in [-1, 1], videos, frames: score these '
+                    'instead of running the checkpoint (e.g. scripts/time_model.py output); needs one --run')
     ap.add_argument('--summary', default=None, help='TSV to append one line per run (default <runs>/eval_summary.tsv)')
     a = ap.parse_args()
     summary = a.summary or os.path.join(a.runs, 'eval_summary.tsv')
@@ -242,6 +244,13 @@ def main():
             if cfg is None:
                 print(f'WARNING: no config for {run}; scoring on clean frames', flush=True)
             print(f'== {run}: noise {noise} ({cfg_path})', flush=True)
+        if a.source == 'model' and a.keypoints:
+            z = np.load(a.keypoints, allow_pickle=True)
+            look = {(str(v), int(f)): i for i, (v, f) in enumerate(zip(z['videos'], z['frames']))}
+            idx = [look[(v, f)] for v, f, *_ in items]
+            X, conf = z['kpts'][idx], (z['conf'][idx] if 'conf' in z else None)
+            epoch, method = (int(z['epoch']) if 'epoch' in z else None), str(z['method']) if 'method' in z else 'keypoints'
+        elif a.source == 'model':
             X, conf, epoch, method = extract(os.path.join(a.runs, run, 'checkpoint.pth.tar'), items, noise,
                                              a.nkpts, a.batch, a.workers, (cfg or {}).get('input_frames'))
         elif a.source == 'gt':
