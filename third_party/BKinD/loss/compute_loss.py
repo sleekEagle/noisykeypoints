@@ -37,14 +37,15 @@ class computeLoss:
 
         self.criterion = [recon_crit, nn.MSELoss().cuda(args.gpu), separation_crit, rotation_crit]
 
-    def update_loss(self, inputs, tr_inputs, loss_mask, output, epoch, tracks=None):
+    def update_loss(self, inputs, tr_inputs, loss_mask, output, epoch, tracks=None, means=None):
         # noisykeypoints: with mixed precision the model outputs may be float16. All loss
         # maths (SSIM target, MSE, rotation, separation) stays in float32; only the VGG
         # feature network runs in float16, and its features are cast back to float32.
         amp = bool(getattr(self.args, 'amp', False))
         output = _to_float(output)
         # noisykeypoints: BKinD's SSIM target, or a noise-robust one (loss/change_target.py)
-        to_pred = change_target(self.args, inputs, tr_inputs, tracks)
+        # (with `temporal`, the target is built from the k-frame means around A and B instead)
+        to_pred = change_target(self.args, *(means if means is not None else (inputs, tr_inputs)), tracks)
         self.last_target = to_pred[:, :1].detach()
         if getattr(self.args, 'motion_mask', None):
             # noisykeypoints: background-subtraction mask (dataloader/background.py). BKinD sums the

@@ -53,7 +53,7 @@ class MouseDataset(data.Dataset):
 
     def __init__(self, root, transform=None, target_transform=None,
                  loader=default_loader, image_size=[128, 128], rotation=True,
-                 simplified=False, crop_box=True, noise=None, motion_mask=None, tracks=None):
+                 simplified=False, crop_box=True, noise=None, motion_mask=None, tracks=None, temporal=None):
 
         samples = generate_pair_images(root)
         self.noise = noise  # noisykeypoints: see dataloader/noise.py (None = clean)
@@ -75,6 +75,12 @@ class MouseDataset(data.Dataset):
         if tracks:
             self.tracks = TrackStore(tracks['dir'], noise, tracks.get('max_points', 256))
             print(f'tracks: {self.tracks.dir}', flush=True)
+
+        # noisykeypoints: temporal = dict(k=3, frames=<every-frame folder>) or None. Also returns the mean of
+        # the k frames centred on A and on B (each noised as in training), for the change target only
+        # (loss/change_target.py); the network still sees single frames. Neighbours past the video's ends
+        # are left out.
+        self.temporal = dict(temporal) if temporal else None
 
         self.root = root
         self.loader = loader
@@ -147,7 +153,21 @@ class MouseDataset(data.Dataset):
         out = (image0, image1, loss_mask, mask, rot_image1, rot_image2, rot_image3, img_path0, img_path1)
         if self.tracks is not None:  # noisykeypoints: (max_points, 5) = A xy, B xy in [-1, 1], valid
             out = out + (self.tracks.get(os.path.basename(os.path.dirname(img_path0)), bgsub.frame_no(img_path0)),)
+        if self.temporal is not None:  # noisykeypoints: last two items = k-frame means around A and B
+            out = out + tuple(self._frame_mean(p, height, width) for p in (img_path0, img_path1))
         return out
+
+    def _frame_mean(self, path, height, width):
+        """noisykeypoints: mean of the k noisy frames centred on `path`, normalised like the frames."""
+        video, f = os.path.basename(os.path.dirname(path)), bgsub.frame_no(path)
+        r = int(self.temporal.get('k', 3)) // 2
+        paths = [os.path.join(self.temporal['frames'], video, f'image_{g:08d}.png') for g in range(f - r, f + r + 1)]
+        paths = [p for p in paths if os.path.exists(p)]
+        ims = [torchvision.transforms.Resize((height, width))(self.loader(p)) for p in paths]
+        ims = apply_noise_pair(ims, self.noise, paths)
+        mean = np.mean([np.asarray(im, np.float32) for im in ims], 0) / 255.0
+        x = torch.from_numpy(mean).permute(2, 0, 1)
+        return TF.normalize(x, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
 
     def __len__(self):

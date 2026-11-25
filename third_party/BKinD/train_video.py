@@ -270,8 +270,11 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
                 output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
 
         # noisykeypoints: images[9] = precomputed point tracks when the config has `tracks`
-        tracks = images[9].cuda(args.gpu, non_blocking=True) if len(images) > 9 else None
-        loss = loss_module.update_loss(inputs, tr_inputs, loss_mask, output, epoch, tracks=tracks)
+        tracks = images[9].cuda(args.gpu, non_blocking=True) if getattr(args, 'tracks', None) else None
+        # noisykeypoints: last two items = k-frame means around A and B, when the config has `temporal`
+        means = (images[-2].cuda(args.gpu, non_blocking=True), images[-1].cuda(args.gpu, non_blocking=True)) \
+            if getattr(args, 'temporal', None) else None
+        loss = loss_module.update_loss(inputs, tr_inputs, loss_mask, output, epoch, tracks=tracks, means=means)
 
         # measure accuracy and record loss
         losses.update(loss.item(), images[0].size(0))

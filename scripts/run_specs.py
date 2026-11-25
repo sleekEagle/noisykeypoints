@@ -97,6 +97,14 @@ def feature_target(run, size=384, gain=1.0):
     return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_ft_', 1), overrides=overrides)
 
 
+def temporal(run, k=3, frames='/root/data/CalMS21_allframes/train'):
+    """BKinD's change target built from the mean of k frames centred on A and on B (the network still sees
+    single frames; dataloader/mouse_dataset.py). Combine with coarse_target for the shrunk version:
+    temporal(coarse_target(bench('pg', 95, 1))) -> CalMS21_t3_ct4_pg_ssim95_s1. Needs every-frame data."""
+    overrides = dict(run.get('overrides', {}), temporal=dict(k=k, frames=frames))
+    return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_t{k}_', 1), overrides=overrides)
+
+
 def bg_mask(run, sigma=2.0, tau=0.1, step=60, window=600, seg=300):
     """Loss only where frame A or B differs from the local background (per-pixel median of nearby
     noisy frames; dataloader/background.py). Works for BKinD and warp runs:

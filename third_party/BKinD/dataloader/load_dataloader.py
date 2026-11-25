@@ -66,7 +66,8 @@ def load_dataloader(args):
                               transforms.ToTensor(),
                               normalize,]),
                               image_size=[args.image_size, args.image_size],
-                              loader=loader, noise=noise, motion_mask=motion_mask, tracks=tracks)
+                              loader=loader, noise=noise, motion_mask=motion_mask, tracks=tracks,
+                              temporal=getattr(args, 'temporal', None))  # noisykeypoints: k-frame means
 
         val_dataset = mouse.MouseDataset(valdir, transforms.Compose([
                               transforms.Resize(args.image_size),
