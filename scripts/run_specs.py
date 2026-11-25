@@ -74,6 +74,22 @@ def warp_track(run, weight=None):
     return out
 
 
+def track_target(run, sigma=4.0, peak=0.5, full=4.0, tracks_dir='/workspace/tracks'):
+    """BKinD whose decoder redraws a map of blobs at the CoTracker3-tracked moving points (positions in A
+    and B) instead of its 1 - SSIM map (loss/change_target.py; needs tracks precomputed for the run's
+    noise): track_target(bench('pg', 95, 1)) -> CalMS21_tt_pg_ssim95_s1."""
+    overrides = dict(run.get('overrides', {}), change_target=dict(type='tracks', sigma=sigma, peak=peak, full=full),
+                     tracks=dict(dir=tracks_dir, max_points=512))
+    return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_tt_', 1), overrides=overrides)
+
+
+def coarse_target(run, factor=4):
+    """Control without a tracker: BKinD's target computed on frames averaged down `factor`x
+    (loss/change_target.py): coarse_target(bench('pg', 95, 1)) -> CalMS21_ct4_pg_ssim95_s1."""
+    overrides = dict(run.get('overrides', {}), change_target=dict(type='coarse', factor=factor))
+    return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_ct{factor}_', 1), overrides=overrides)
+
+
 def bg_mask(run, sigma=2.0, tau=0.1, step=60, window=600, seg=300):
     """Loss only where frame A or B differs from the local background (per-pixel median of nearby
     noisy frames; dataloader/background.py). Works for BKinD and warp runs:

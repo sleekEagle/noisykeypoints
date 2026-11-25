@@ -94,6 +94,8 @@ def main():
     ap.add_argument('--wait', action='store_true',
                     help='first wait until no other training (train_video.py) is running on this pod')
     ap.add_argument('--no-install', action='store_true')
+    ap.add_argument('--lock', default='/tmp/runpod_bkind.lock',
+                    help='lock file; another one (e.g. /tmp/runpod_bkind_side.lock) trains next to the main queue')
     a = ap.parse_args()
 
     t0 = time.time()
@@ -108,7 +110,7 @@ def main():
 
     # Only one launcher per pod uses the GPU at a time: a lock on the pod's local disk (not on the
     # network volume, which other pods share). --wait queues behind the launcher holding it.
-    lock = acquire_pod_lock(a.wait)  # noqa: F841 (held until this process exits)
+    lock = acquire_pod_lock(a.wait, a.lock)  # noqa: F841 (held until this process exits)
 
     if a.wait:  # also wait for training started outside a launcher (e.g. a hand-started test)
         while subprocess.run(['pgrep', '-f', 'python.*train_video.py'], capture_output=True).returncode == 0:

@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from loss.separation_loss import separation_loss
 from loss.rotation_loss import rotation_loss
 from loss.ssim_loss import compute_ssim
+from loss.change_target import change_target  # noisykeypoints
 
 from model.vggforLoss import mse_loss_mask, VGG_feat
 
@@ -36,13 +37,15 @@ class computeLoss:
 
         self.criterion = [recon_crit, nn.MSELoss().cuda(args.gpu), separation_crit, rotation_crit]
 
-    def update_loss(self, inputs, tr_inputs, loss_mask, output, epoch):
+    def update_loss(self, inputs, tr_inputs, loss_mask, output, epoch, tracks=None):
         # noisykeypoints: with mixed precision the model outputs may be float16. All loss
         # maths (SSIM target, MSE, rotation, separation) stays in float32; only the VGG
         # feature network runs in float16, and its features are cast back to float32.
         amp = bool(getattr(self.args, 'amp', False))
         output = _to_float(output)
-        to_pred = compute_ssim(inputs.float(), tr_inputs.float())
+        # noisykeypoints: BKinD's SSIM target, or a noise-robust one (loss/change_target.py)
+        to_pred = change_target(self.args, inputs, tr_inputs, tracks)
+        self.last_target = to_pred[:, :1].detach()
         if getattr(self.args, 'motion_mask', None):
             # noisykeypoints: background-subtraction mask (dataloader/background.py). BKinD sums the
             # masked error over all pixels, so a mask covering ~10% of the picture would shrink the

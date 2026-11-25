@@ -269,7 +269,9 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
             else:
                 output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
 
-        loss = loss_module.update_loss(inputs, tr_inputs, loss_mask, output, epoch)
+        # noisykeypoints: images[9] = precomputed point tracks when the config has `tracks`
+        tracks = images[9].cuda(args.gpu, non_blocking=True) if len(images) > 9 else None
+        loss = loss_module.update_loss(inputs, tr_inputs, loss_mask, output, epoch, tracks=tracks)
 
         # measure accuracy and record loss
         losses.update(loss.item(), images[0].size(0))
@@ -288,8 +290,11 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
             progress.display(i)
             
             if args.visualize:
-                save_images(tr_inputs, output, epoch, args, epoch,
-                            motion=loss_mask if getattr(args, 'motion_mask', None) else None)
+                # noisykeypoints: motion_i.png = the loss mask, or the change target when it is not BKinD's
+                motion = loss_mask if getattr(args, 'motion_mask', None) else None
+                if getattr(args, 'change_target', None):
+                    motion = loss_module.last_target / loss_module.last_target.amax((1, 2, 3), keepdim=True).clamp(min=1e-6)
+                save_images(tr_inputs, output, epoch, args, epoch, motion=motion)
 
     return losses.avg
 
