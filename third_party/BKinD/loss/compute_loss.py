@@ -43,7 +43,10 @@ class computeLoss:
         """BKinD's reconstruction loss (pixels + VGG features, each divided by its perc_weight),
         per image: (B,). Its batch mean is BKinD's original value."""
         with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
-            vgg_feat_in = self.loss_model(to_pred)
+            # noisykeypoints: the target is a constant and VGG is not trained, so its features need no
+            # gradient graph (same values, less memory; matters with several scale heads)
+            with torch.no_grad():
+                vgg_feat_in = self.loss_model(to_pred)
             vgg_feat_out = self.loss_model(recon)
         vgg_feat_in = _to_float(vgg_feat_in)
         vgg_feat_out = _to_float(vgg_feat_out)
