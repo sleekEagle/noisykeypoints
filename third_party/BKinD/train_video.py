@@ -17,6 +17,7 @@ from dataloader.load_dataloader import load_dataloader
 
 from model.unsupervised_model import Model
 from model.multiframe import n_input_frames  # noisykeypoints
+from model.scale_sigma import multi_scale_args  # noisykeypoints
 from model.warp_model import WarpModel  # noisykeypoints: our method (method: warp)
 
 from loss.compute_loss import *
@@ -70,7 +71,10 @@ def main_worker(gpu, ngpus_per_node, args):
         model = WarpModel(args.nkpts, output_shape=output_shape)
     else:
         # noisykeypoints: `input_frames` = the keypoint network sees k frames (model/multiframe.py)
-        model = Model(args.nkpts, output_shape=output_shape, n_frames=n_input_frames(args))
+        # noisykeypoints: `multi_scale` = one decoder head per target resolution (model/scale_sigma.py)
+        factors, sigma_kind = multi_scale_args(args)
+        model = Model(args.nkpts, output_shape=output_shape, n_frames=n_input_frames(args),
+                      n_scales=max(len(factors), 1), scale_sigma=sigma_kind)
 
     if args.gpu is not None:
         torch.cuda.set_device(args.gpu)
@@ -82,7 +86,7 @@ def main_worker(gpu, ngpus_per_node, args):
         loss_module = WarpLoss(args)
         optimizer = torch.optim.Adam(model.parameters(), args.lr, betas=(0.5, 0.999))
     else:
-        loss_module = computeLoss(args)
+        loss_module = computeLoss(args, model)
         optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                     momentum=args.momentum,
                                     weight_decay=args.weight_decay)
@@ -296,13 +300,22 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
 
         if i % args.print_freq == 0:
             progress.display(i)
+            if getattr(args, 'multi_scale', None):  # noisykeypoints: each head's loss and weight exp(-s)
+                sc = loss_module.last_scale
+                print('scales', ' '.join(f'x{f}: L {l:.4f} w {w:.3f}' for f, l, w in
+                                         zip(sc['factors'], sc['L'].tolist(), sc['weight'].tolist())), flush=True)
             
             if args.visualize:
                 # noisykeypoints: motion_i.png = the loss mask, or the change target when it is not BKinD's
                 motion = loss_mask if getattr(args, 'motion_mask', None) else None
-                if getattr(args, 'change_target', None):
+                if getattr(args, 'change_target', None) or getattr(args, 'multi_scale', None):
                     motion = loss_module.last_target / loss_module.last_target.amax((1, 2, 3), keepdim=True).clamp(min=1e-6)
-                save_images(tr_inputs, output, epoch, args, epoch, motion=motion)
+                vis = output
+                if getattr(args, 'multi_scale', None):
+                    # noisykeypoints: show the head with the largest weight; print each head's loss and weight
+                    j = loss_module.last_head
+                    vis = (output[0][:, 3 * j:3 * j + 3],) + tuple(output[1:])
+                save_images(tr_inputs, vis, epoch, args, epoch, motion=motion)
 
     return losses.avg
 
@@ -343,7 +356,7 @@ def validate(val_loader, model, loss_module, epoch, args):
             with torch.autocast('cuda', dtype=torch.float16, enabled=args.amp):
                 output = model(inputs, tr_inputs, gmtr_x1 = rot_im1, gmtr_x2 = rot_im2, gmtr_x3 = rot_im3)
             # Note that validate function only computes MSE loss
-            loss = loss_module.criterion[1](output[0].float() * loss_mask, tr_inputs[:, -3:] * loss_mask)
+            loss = loss_module.criterion[1](output[0][:, :3].float() * loss_mask, tr_inputs[:, -3:] * loss_mask)
 
             losses.update(loss.item(), images[0].size(0))
 

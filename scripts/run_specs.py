@@ -90,6 +90,15 @@ def coarse_target(run, factor=4):
     return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_ct{factor}_', 1), overrides=overrides)
 
 
+def multi_scale(run, factors=(1, 2, 4), sigma='global'):
+    """BKinD with one decoder head per change-target resolution (full, 2x, 4x averaged), each weighted by
+    a learned uncertainty (model/scale_sigma.py). sigma 'global' = one number per head -> CalMS21_msg_*,
+    'image' = predicted per image pair -> CalMS21_msi_*: multi_scale(bench('pg', 95, 1), sigma='image')."""
+    tag = {'global': 'msg', 'image': 'msi'}[sigma]
+    overrides = dict(run.get('overrides', {}), multi_scale=dict(factors=list(factors), sigma=sigma))
+    return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_{tag}_', 1), overrides=overrides)
+
+
 def feature_target(run, size=384, gain=1.0):
     """BKinD whose decoder redraws the change in CoTracker3's frozen encoder features between A and B
     (loss/change_target.py): feature_target(bench('pg', 95, 1)) -> CalMS21_ft_pg_ssim95_s1."""

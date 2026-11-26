@@ -6,7 +6,8 @@ import torch.nn.functional as F
 from loss.separation_loss import separation_loss
 from loss.rotation_loss import rotation_loss
 from loss.ssim_loss import compute_ssim
-from loss.change_target import change_target  # noisykeypoints
+from loss.change_target import change_target, coarse_target  # noisykeypoints
+from model.scale_sigma import multi_scale_args  # noisykeypoints
 
 from model.vggforLoss import mse_loss_mask, VGG_feat
 
@@ -24,8 +25,9 @@ def define_loss(args):
     return loss_model, criterion
 
 class computeLoss:
-    def __init__(self, args):
+    def __init__(self, args, model=None):
         self.args = args
+        self.model = model  # noisykeypoints: multi_scale reads model.last_log_var
 
         self.loss_model = VGG_feat()
         self.loss_model = torch.nn.DataParallel(self.loss_model).cuda(args.gpu)
@@ -36,6 +38,29 @@ class computeLoss:
         rotation_crit = rotation_loss().cuda(args.gpu)
 
         self.criterion = [recon_crit, nn.MSELoss().cuda(args.gpu), separation_crit, rotation_crit]
+
+    def _recon_loss(self, to_pred, recon, loss_mask, amp):
+        """BKinD's reconstruction loss (pixels + VGG features, each divided by its perc_weight),
+        per image: (B,). Its batch mean is BKinD's original value."""
+        with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
+            vgg_feat_in = self.loss_model(to_pred)
+            vgg_feat_out = self.loss_model(recon)
+        vgg_feat_in = _to_float(vgg_feat_in)
+        vgg_feat_out = _to_float(vgg_feat_out)
+
+        l = self.criterion[0](to_pred, recon, loss_mask)
+        wl = _exp_running_avg(l.mean(), init_val=self.args.perc_weight[0])
+        l /= wl
+        loss = l.mean((1, 2, 3))
+
+        for _i in range(0, len(vgg_feat_in)):
+            _mask = F.upsample(loss_mask,
+                               size=(vgg_feat_in[_i].size(2), vgg_feat_in[_i].size(3)), mode='bilinear') # in_mask
+            l = self.criterion[0](vgg_feat_in[_i], vgg_feat_out[_i], _mask)
+            wl = _exp_running_avg(l.mean(), init_val=self.args.perc_weight[_i+1])
+            l /= wl
+            loss = loss + l.mean((1, 2, 3))
+        return loss
 
     def update_loss(self, inputs, tr_inputs, loss_mask, output, epoch, tracks=None, means=None):
         # noisykeypoints: with mixed precision the model outputs may be float16. All loss
@@ -55,26 +80,24 @@ class computeLoss:
             loss_mask = loss_mask.float()
             loss_mask = loss_mask / loss_mask.mean((1, 2, 3), keepdim=True).clamp(min=0.02)
 
-        with torch.autocast('cuda', dtype=torch.float16, enabled=amp):
-            vgg_feat_in = self.loss_model(to_pred)
-            vgg_feat_out = self.loss_model(output[0])
-        vgg_feat_in = _to_float(vgg_feat_in)
-        vgg_feat_out = _to_float(vgg_feat_out)
-
-        l = self.criterion[0](to_pred, output[0], loss_mask)
-        wl = _exp_running_avg(l.mean(), init_val=self.args.perc_weight[0])
-        l /= wl
-
-        loss = l.mean()
-
-        for _i in range(0, len(vgg_feat_in)):
-            _mask = F.upsample(loss_mask,
-                               size=(vgg_feat_in[_i].size(2), vgg_feat_in[_i].size(3)), mode='bilinear') # in_mask
-            l = self.criterion[0](vgg_feat_in[_i], vgg_feat_out[_i], _mask)
-            wl = _exp_running_avg(l.mean(), init_val=self.args.perc_weight[_i+1])
-            l /= wl
-
-            loss += l.mean()
+        factors, _ = multi_scale_args(self.args)
+        if factors:
+            # noisykeypoints: one decoder head per resolution, weighted by learned uncertainty
+            # (model/scale_sigma.py). Head k redraws the change target at factors[k].
+            if getattr(self.args, 'change_target', None):
+                raise ValueError('multi_scale replaces change_target; set only one')
+            log_var = self.model.last_log_var.float()                     # (B, n_scales)
+            targets = [compute_ssim(inputs.float(), tr_inputs.float()) if f == 1 else
+                       coarse_target(inputs, tr_inputs, f) for f in factors]
+            L = torch.stack([self._recon_loss(t, output[0][:, 3 * k:3 * k + 3], loss_mask, amp)
+                             for k, t in enumerate(targets)], 1)             # (B, n_scales)
+            loss = (L * torch.exp(-log_var) + log_var).mean(1).mean()
+            weight = torch.exp(-log_var).detach().mean(0)
+            self.last_scale = dict(L=L.detach().mean(0), weight=weight, factors=factors)
+            self.last_head = int(weight.argmax())                            # head shown in samples
+            self.last_target = targets[self.last_head][:, :1].detach()
+        else:
+            loss = self._recon_loss(to_pred, output[0], loss_mask, amp).mean()
 
         if epoch >= self.args.curriculum:
             deg = torch.ones((output[2][1].size()[0]), device=output[2][1].device) * 90

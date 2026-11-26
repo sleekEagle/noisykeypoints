@@ -4,6 +4,7 @@ import torch.nn as nn
 from .resnet_updated import conv3x3
 from .resnet_updated import resnetbank50all as resnetbank50
 from .multiframe import inflate_input
+from .scale_sigma import make_scale_sigma
 from .globalNet import globalNet
 
 import math
@@ -42,7 +43,7 @@ class BasicBlock(nn.Module):
     
 
 class Decoder(nn.Module):
-    def __init__(self, in_planes=256, wh=14, n_kps=10, ratio=1.0):
+    def __init__(self, in_planes=256, wh=14, n_kps=10, ratio=1.0, out_ch=3):
         super(Decoder, self).__init__()
         
         self.K = n_kps
@@ -64,7 +65,7 @@ class Decoder(nn.Module):
                                  upsample=nn.Upsample((int(h*32), int(w*32)), mode='bilinear'))
         in_planes = max(int(in_planes/2), 32)
         
-        self.conv_final = nn.Conv2d(int(in_planes), 3, kernel_size=1, stride=1)
+        self.conv_final = nn.Conv2d(int(in_planes), out_ch, kernel_size=1, stride=1)  # noisykeypoints: 3 per scale head
         
     def forward(self, x, heatmap):
         
@@ -85,7 +86,8 @@ class Decoder(nn.Module):
     
     
 class Model(nn.Module):
-    def __init__(self, n_kps=10, output_dim=200, pretrained=True, output_shape=(64, 64), n_frames=1):
+    def __init__(self, n_kps=10, output_dim=200, pretrained=True, output_shape=(64, 64), n_frames=1,
+                 n_scales=1, scale_sigma=None):
 
         super(Model, self).__init__()
         self.K = n_kps
@@ -99,7 +101,9 @@ class Model(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         
         # width == height for now
-        self.decoder = Decoder(in_planes=2048, wh=int(output_shape[0]/8), n_kps=self.K*2, ratio=1.0)
+        # noisykeypoints: with `multi_scale` the decoder has one 3-channel head per target resolution
+        self.decoder = Decoder(in_planes=2048, wh=int(output_shape[0]/8), n_kps=self.K*2, ratio=1.0,
+                               out_ch=3 * n_scales)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -110,6 +114,11 @@ class Model(nn.Module):
         
         self.encoder = resnetbank50(pretrained=pretrained)
         inflate_input(self.encoder, n_frames)  # noisykeypoints: model/multiframe.py
+
+        # noisykeypoints: learned log-variance s = log sigma^2 of each scale head (model/scale_sigma.py);
+        # made after the init loop above so its zero init is kept
+        self.scale_sigma = make_scale_sigma(scale_sigma, n_scales)
+        self.last_log_var = None
 
     def get_keypoints(self, x):
         x_res = self.encoder(x)
@@ -186,6 +195,8 @@ class Model(nn.Module):
             tr_kpt_conds.append(hmaps)
             
         recon = self.decoder(x_res, tr_kpt_conds)
+        if self.scale_sigma is not None:  # noisykeypoints: (B, n_scales) log-variances, read by the loss
+            self.last_log_var = self.scale_sigma(x[:, -3:], tr_x[:, -3:])
         
         if gmtr_x1 is not None:  # Rotation loss
             out_h, out_w = int(self.output_shape[0]*2), int(self.output_shape[1]*2)
