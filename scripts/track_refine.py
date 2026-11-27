@@ -167,7 +167,7 @@ def main():
     bins = np.digitize(far[:, 0], qs)
     rep['far_from_tracks_by_conf_quartile'] = [float((far[bins == b, 1] > 8).mean()) for b in range(4)]
     rep['median_px_from_tracks_by_conf_quartile'] = [float(np.median(far[bins == b, 1])) for b in range(4)]
-    rep.update(run=a.run, noise=noise, win=a.win, anchors=a.anchors, gate=a.gate)
+    rep.update(run=a.run, noise=noise, win=a.win, anchors=a.anchors, gate_threshold=a.gate)
     json.dump(rep, open(f'{a.out}/report.json', 'w'), indent=1)
     print(json.dumps(rep), flush=True)
 
