@@ -176,6 +176,7 @@ class Model(nn.Module):
         
         if tr_x is None:
             return (u_x, u_y), kpt_out[-1]
+        self.last_heatmaps = (heatmap, tr_heatmap)  # noisykeypoints: softmax heatmaps of A and B (fg_penalty)
 
         tr_kpt_conds = []
         

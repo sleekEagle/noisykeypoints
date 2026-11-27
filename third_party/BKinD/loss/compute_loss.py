@@ -8,6 +8,7 @@ from loss.rotation_loss import rotation_loss
 from loss.ssim_loss import compute_ssim
 from loss.change_target import change_target, coarse_target  # noisykeypoints
 from model.scale_sigma import multi_scale_args, multi_scale_normalize  # noisykeypoints
+from loss.fg_penalty import fg_penalty  # noisykeypoints
 
 from model.vggforLoss import mse_loss_mask, VGG_feat
 
@@ -75,7 +76,12 @@ class computeLoss:
         # (with `temporal`, the target is built from the k-frame means around A and B instead)
         to_pred = change_target(self.args, *(means if means is not None else (inputs, tr_inputs)), tracks)
         self.last_target = to_pred[:, :1].detach()
-        if getattr(self.args, 'motion_mask', None):
+        motion_mask = getattr(self.args, 'motion_mask', None)
+        fg = loss_mask.float() if motion_mask and getattr(self.args, 'fg_penalty', None) else None
+        if motion_mask and not motion_mask.get('recon', True):
+            # noisykeypoints: mask used only by fg_penalty; the reconstruction loss covers every pixel
+            loss_mask = torch.ones_like(loss_mask[:, :1]).float()
+        elif motion_mask:
             # noisykeypoints: background-subtraction mask (dataloader/background.py). BKinD sums the
             # masked error over all pixels, so a mask covering ~10% of the picture would shrink the
             # reconstruction loss ~10x next to the rotation and separation terms. Rescale each image's
@@ -109,6 +115,15 @@ class computeLoss:
             self.last_target = targets[self.last_head][:, :1].detach()
         else:
             loss = self._recon_loss(to_pred, output[0], loss_mask, amp).mean()
+
+        fgp = getattr(self.args, 'fg_penalty', None)
+        if fgp:
+            # noisykeypoints: share of the keypoint heatmaps of A and B lying off the foreground (loss/fg_penalty.py)
+            if fg is None:
+                raise ValueError('fg_penalty needs motion_mask (the foreground comes from background subtraction)')
+            pen = fg_penalty(getattr(self.model, 'module', self.model).last_heatmaps, fg).mean()
+            self.last_fg_penalty = float(pen.detach())
+            loss = loss + float(fgp.get('weight', 1.0)) * pen
 
         if epoch >= self.args.curriculum:
             deg = torch.ones((output[2][1].size()[0]), device=output[2][1].device) * 90

@@ -133,6 +133,17 @@ def bg_mask(run, sigma=2.0, tau=0.1, step=60, window=600, seg=300):
     return dict(run, name=run['name'].replace('CalMS21_', 'CalMS21_bgm_', 1), overrides=overrides)
 
 
+def fg_pen(run, weight=0.1, sigma=2.0, tau=0.1, step=60, window=600, seg=300):
+    """Soft penalty on the share of each keypoint heatmap lying off the background-subtraction foreground
+    (loss/fg_penalty.py). The mask is used only for this penalty, not for the reconstruction loss:
+    fg_pen(coarse_target(bench('pg', 95, 1))) -> CalMS21_fgp01_ct4_pg_ssim95_s1 (weight 0.1)."""
+    tag = f'{weight:g}'.replace('.', '')
+    overrides = dict(run.get('overrides', {}),
+                     motion_mask=dict(sigma=sigma, tau=tau, step=step, window=window, seg=seg, recon=False),
+                     fg_penalty=dict(weight=weight))
+    return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_fgp{tag}_', 1), overrides=overrides)
+
+
 def clean(seed):
     return dict(name=f'CalMS21_clean_s{seed}', seed=seed)
 

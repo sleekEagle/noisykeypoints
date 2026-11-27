@@ -304,7 +304,9 @@ def train(train_loader, model, loss_module, optimizer, epoch, args, scaler):
                 sc = loss_module.last_scale
                 print('scales', ' '.join(f'x{f}: L {l:.4f} w {w:.3f}' for f, l, w in
                                          zip(sc['factors'], sc['L'].tolist(), sc['weight'].tolist())), flush=True)
-            
+            if getattr(args, 'fg_penalty', None):  # noisykeypoints: share of heatmap mass off the foreground
+                print(f'fg_penalty {loss_module.last_fg_penalty:.4f}', flush=True)
+
             if args.visualize:
                 # noisykeypoints: motion_i.png = the loss mask, or the change target when it is not BKinD's
                 motion = loss_mask if getattr(args, 'motion_mask', None) else None
