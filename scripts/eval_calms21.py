@@ -188,6 +188,18 @@ def scores(pred_px, gt_px, length):
     return res
 
 
+def eval_noise_spec(ev):
+    """'clean' -> None; 'pg95' / 'h264_99' -> the noise of run_specs.bench(kind, ssim) (noise seed 0, as in training)."""
+    if ev == 'clean':
+        return None
+    m = re.fullmatch(r'(pg|sp|blur|h264)_?(\d\d)', ev)
+    if not m:
+        raise ValueError(f'unknown --eval-noise {ev!r}')
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from run_specs import bench
+    return bench(m.group(1), int(m.group(2)), 1)['overrides']['noise']
+
+
 def on_mouse(kpts_px, gt_px, length, thresh=0.25):
     """Share of frames each discovered keypoint lies within thresh * length of a keypoint of each mouse."""
     d = np.linalg.norm(kpts_px[:, :, None, None] - gt_px[:, None], axis=-1).min(-1)  # (N, K, 2 mice)
@@ -201,7 +213,9 @@ def main():
     ap.add_argument('--runs', default='/workspace/runs')
     ap.add_argument('--data', default='/root/data/CalMS21_bkind/train')
     ap.add_argument('--source', default='model', choices=['model', 'gt', 'random'])
-    ap.add_argument('--eval-noise', default='train', choices=['train', 'clean'])
+    ap.add_argument('--eval-noise', nargs='+', default=['train'],
+                    help="'train' (the run's own noise), 'clean', or benchmark cells such as pg95 sp90 blur98 h264_99 "
+                         "(type + SSIM, the exact settings of run_specs.bench); several = one score each")
     ap.add_argument('--stride', type=int, default=7)
     ap.add_argument('--folds', type=int, default=5)
     ap.add_argument('--nkpts', type=int, default=10)
@@ -232,11 +246,11 @@ def main():
                           ).reshape(gt_px.shape), gt_px, length)
     print(f"mean-pose floor: nerr black {floor['black']['nerr']:.3f} white {floor['white']['nerr']:.3f}", flush=True)
 
-    for run in a.run:
+    for run, ev in [(run, ev) for run in a.run for ev in a.eval_noise]:
         cfg, cfg_path = run_config(run, a.runs)
-        noise = (cfg or {}).get('noise') if a.eval_noise == 'train' else None
+        noise = (cfg or {}).get('noise') if ev == 'train' else eval_noise_spec(ev)
         tag = run if a.source == 'model' else f'sanity_{a.source}'
-        out = os.path.join(a.runs, run, 'eval' + ('' if a.eval_noise == 'train' else '_clean')) \
+        out = os.path.join(a.runs, run, 'eval' + ('' if ev == 'train' else f'_{ev}')) \
             if a.source == 'model' else os.path.join(a.runs, 'eval_sanity', a.source)
         os.makedirs(out, exist_ok=True)
         epoch, method, conf = None, a.source, None
@@ -260,14 +274,14 @@ def main():
         pred_px = to_pix(cross_val(X, Y, videos, a.folds)).reshape(gt_px.shape)
         res = scores(pred_px, gt_px, length)
         share = on_mouse(to_pix(X), gt_px, length)
-        res.update(run=tag, method=method, epoch=epoch, noise=noise, eval_noise=a.eval_noise,
+        res.update(run=tag, method=method, epoch=epoch, noise=noise, eval_noise=ev,
                    frames=len(items), stride=a.stride, folds=a.folds,
                    floor_mean_pose={m: floor[m]['nerr'] for m in ('black', 'white', 'both')},
                    kpts_on_black=int((share[:, 0] >= 0.5).sum()), kpts_on_white=int((share[:, 1] >= 0.5).sum()),
                    on_mouse_share=share.tolist(),
                    kpt_spread=float(np.std(to_pix(X), axis=0).mean()))  # ~0 = keypoints never move
         json.dump(res, open(os.path.join(out, 'metrics.json'), 'w'), indent=1)
-        line = (f"{tag}\tepoch {epoch}\teval {a.eval_noise}\t"
+        line = (f"{tag}\tepoch {epoch}\teval {ev}\t"
                 f"nerr black {res['black']['nerr']:.3f} white {res['white']['nerr']:.3f} both {res['both']['nerr']:.3f}\t"
                 f"PCK@0.2 black {res['black']['pck02']:.3f} white {res['white']['pck02']:.3f}\t"
                 f"on black {res['kpts_on_black']} white {res['kpts_on_white']}\t"
