@@ -223,6 +223,7 @@ def main():
     ap.add_argument('--workers', type=int, default=8)
     ap.add_argument('--keypoints', default=None, help='npz with kpts (N, K, 2) in [-1, 1], videos, frames: score these '
                     'instead of running the checkpoint (e.g. scripts/time_model.py output); needs one --run')
+    ap.add_argument('--out', default=None, help='output folder (default <runs>/<run>/eval[_<noise>]); use with --keypoints')
     ap.add_argument('--summary', default=None, help='TSV to append one line per run (default <runs>/eval_summary.tsv)')
     a = ap.parse_args()
     summary = a.summary or os.path.join(a.runs, 'eval_summary.tsv')
@@ -252,6 +253,7 @@ def main():
         tag = run if a.source == 'model' else f'sanity_{a.source}'
         out = os.path.join(a.runs, run, 'eval' + ('' if ev == 'train' else f'_{ev}')) \
             if a.source == 'model' else os.path.join(a.runs, 'eval_sanity', a.source)
+        out = a.out or out
         os.makedirs(out, exist_ok=True)
         epoch, method, conf = None, a.source, None
         if a.source == 'model':
