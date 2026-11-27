@@ -2,7 +2,8 @@
 
 On the 24 pilot clips (scripts/pilot_cotracker_clips.py: 64 consecutive frames, 256 px), for each noise
 condition (noise exactly as the loader adds it; H.264 encodes the whole clip):
-  prompt   background subtraction on the (noisy) frames against the clean cached local background
+  prompt   (--prompt auto, default) SAM 2's automatic masks of frame 0, the two mouse-sized ones that differ
+           most from the background (prompts_auto). (--prompt boxes) background subtraction on the (noisy) frames against the clean cached local background
            (dataloader/background.py; median of many noisy frames is ~ the clean one): the two largest
            mouse-sized blobs at full strength (see prompts()). Prompt frame = the first frame with two blobs (else the frame with the
            largest blob). Each blob's box prompts one SAM 2 object; SAM 2 (sam2.1-hiera-large, video
@@ -84,7 +85,22 @@ def prompts(soft):
     return t, [np.array([sl[1].start, sl[0].start, sl[1].stop, sl[0].stop], np.float32) for _, _, sl in cand]
 
 
-def sam_masks(pred, frames, t0, boxes, tmp):
+def prompts_auto(gen, frame, soft):
+    """SAM 2's automatic masks of the frame, scored by how much they differ from the background (mean of the
+    background-subtraction map inside them); the two best mouse-sized ones (150-5000 px, not overlapping)."""
+    cands = [m['segmentation'] for m in gen.generate(np.asarray(frame.convert('RGB')))
+             if 150 <= m['area'] <= 5000]
+    cands.sort(key=lambda m: -soft[m].mean())
+    keep = []
+    for m in cands:
+        if all((m & k).sum() < 0.3 * min(m.sum(), k.sum()) for k in keep):
+            keep.append(m)
+        if len(keep) == 2:
+            break
+    return keep
+
+
+def sam_masks(pred, frames, t0, prompts_, tmp):
     T = len(frames)
     for i in range(T):  # init_state needs a JPEG folder; the frames themselves are replaced below
         frames[i].save(os.path.join(tmp, f'{i:05d}.jpg'), quality=95)
@@ -95,8 +111,11 @@ def sam_masks(pred, frames, t0, boxes, tmp):
                       for f in frames])  # exact (noisy) PNG frames, SAM 2's own preprocessing
         st['images'] = torch.from_numpy(x).permute(0, 3, 1, 2).float().to(st['images'].device)
         st['cached_features'] = {}  # init_state warmed up on the JPEG of frame 0
-        for k, b in enumerate(boxes):
-            pred.add_new_points_or_box(st, frame_idx=t0, obj_id=k, box=b)
+        for k, p in enumerate(prompts_):
+            if p.ndim == 2:  # a mask
+                pred.add_new_mask(st, frame_idx=t0, obj_id=k, mask=torch.from_numpy(p))
+            else:            # a box
+                pred.add_new_points_or_box(st, frame_idx=t0, obj_id=k, box=p)
         out = np.zeros((T, S, S), bool)
         for rev in (False, True):
             for f, _, logits in pred.propagate_in_video(st, start_frame_idx=t0, reverse=rev):
@@ -123,10 +142,15 @@ def main():
     ap.add_argument('--out', required=True)
     ap.add_argument('--conds', nargs='+', default=list(CONDS))
     ap.add_argument('--max-clips', type=int, default=None)
+    ap.add_argument('--prompt', default='auto', choices=['auto', 'boxes'],
+                    help='auto: SAM 2 automatic masks of frame 0 scored by background change; boxes: blobs')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     from sam2.sam2_video_predictor import SAM2VideoPredictor
     pred = SAM2VideoPredictor.from_pretrained('facebook/sam2.1-hiera-large')
+    if a.prompt == 'auto':
+        from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+        gen = SAM2AutomaticMaskGenerator.from_pretrained('facebook/sam2.1-hiera-large', points_per_side=32)
     clips = json.load(open(os.path.join(a.clips, 'clips.json')))[:a.max_clips]
     kpz = np.load(os.path.join(a.data, 'keypoints.npz'))
     kp = {f"{v}/keypoints": kpz[f"{v}/keypoints"] for v in {c['video'] for c in clips}}
@@ -146,7 +170,10 @@ def main():
             bg = bgsub.background_for(bgs[c['video']], c['start'])
             soft = bg_soft(fr, bg)
             fgm = soft > 0.5
-            t0, boxes = prompts(soft)
+            if a.prompt == 'auto':
+                t0, boxes = 0, prompts_auto(gen, fr[0], soft[0])
+            else:
+                t0, boxes = prompts(soft)
             with tempfile.TemporaryDirectory() as tmp:
                 sm = sam_masks(pred, list(fr), t0, boxes, tmp) if boxes else np.zeros_like(fgm)
             for meth, m in (('sam', sm), ('bgsub', fgm)):
