@@ -3,8 +3,8 @@
 On the 24 pilot clips (scripts/pilot_cotracker_clips.py: 64 consecutive frames, 256 px), for each noise
 condition (noise exactly as the loader adds it; H.264 encodes the whole clip):
   prompt   background subtraction on the (noisy) frames against the clean cached local background
-           (dataloader/background.py; median of many noisy frames is ~ the clean one), threshold 0.5,
-           the two largest blobs. Prompt frame = the first frame with two blobs (else the frame with the
+           (dataloader/background.py; median of many noisy frames is ~ the clean one): the two largest
+           mouse-sized blobs at full strength (see prompts()). Prompt frame = the first frame with two blobs (else the frame with the
            largest blob). Each blob's box prompts one SAM 2 object; SAM 2 (sam2.1-hiera-large, video
            predictor) tracks them forward and backward through the clip. No MARS labels are used.
   sam      union of the SAM 2 object masks
@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from PIL import Image  # noqa: E402
-from scipy.ndimage import label  # noqa: E402
+from scipy.ndimage import binary_opening, find_objects, label  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pilot_cotracker import load_clip, mars_clip, S  # noqa: E402
@@ -54,34 +54,34 @@ CONDS = {
 MEAN, STD = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
 
 
-def bg_masks(frames, bg):
-    return np.stack([bgsub.foreground(bgsub.to_gray(f), bg, 2.0, 0.1) > 0.5 for f in frames])  # (T, S, S)
+def bg_soft(frames, bg):
+    return np.stack([bgsub.foreground(bgsub.to_gray(f), bg, 2.0, 0.1) for f in frames])  # (T, S, S) in [0, 1]
 
 
-def prompts(fg):
-    """Boxes (x0, y0, x1, y1) of the two largest blobs on the prompt frame."""
+def prompts(soft):
+    """Boxes (x0, y0, x1, y1) of the two largest mouse-sized blobs on the prompt frame. Blobs come from the
+    background-subtraction map at full strength (>= 0.99, i.e. >= 0.1 grey-level change), opened to drop
+    specks; moved bedding makes large flat blobs, so blobs over 4000 px or 110 px wide are skipped."""
     best = None
-    for t in range(len(fg)):
-        lab, n = label(fg[t])
+    for t in range(len(soft)):
+        lab, n = label(binary_opening(soft[t] >= 0.99, iterations=2))
         if n == 0:
             continue
-        areas = np.bincount(lab.ravel())[1:]
-        order = np.argsort(areas)[::-1]
-        keep = [i + 1 for i in order[:2] if areas[i] >= 30]
-        if not keep:
-            continue
-        if best is None or len(keep) > len(best[1]) or (len(keep) == len(best[1]) and areas[order[0]] > best[2]):
-            best = (t, keep, areas[order[0]], lab)
-        if len(keep) == 2:
+        cand = []
+        for i, sl in enumerate(find_objects(lab), 1):
+            area = int((lab[sl] == i).sum())
+            if 80 <= area <= 4000 and sl[0].stop - sl[0].start <= 110 and sl[1].stop - sl[1].start <= 110:
+                cand.append((area, i, sl))
+        cand = sorted(cand, reverse=True)[:2]
+        if cand and (best is None or len(cand) > len(best[1]) or
+                     (len(cand) == len(best[1]) and cand[0][0] > best[1][0][0])):
+            best = (t, cand)
+        if len(cand) == 2:
             break
     if best is None:
         return None, []
-    t, keep, _, lab = best
-    boxes = []
-    for i in keep:
-        ys, xs = np.where(lab == i)
-        boxes.append(np.array([xs.min(), ys.min(), xs.max() + 1, ys.max() + 1], np.float32))
-    return t, boxes
+    t, cand = best
+    return t, [np.array([sl[1].start, sl[0].start, sl[1].stop, sl[0].stop], np.float32) for _, _, sl in cand]
 
 
 def sam_masks(pred, frames, t0, boxes, tmp):
@@ -144,8 +144,9 @@ def main():
         for n in a.conds:
             fr = apply_noise_pair(frames, CONDS[n], paths) if CONDS[n] else frames
             bg = bgsub.background_for(bgs[c['video']], c['start'])
-            fgm = bg_masks(fr, bg)
-            t0, boxes = prompts(fgm)
+            soft = bg_soft(fr, bg)
+            fgm = soft > 0.5
+            t0, boxes = prompts(soft)
             with tempfile.TemporaryDirectory() as tmp:
                 sm = sam_masks(pred, list(fr), t0, boxes, tmp) if boxes else np.zeros_like(fgm)
             for meth, m in (('sam', sm), ('bgsub', fgm)):
