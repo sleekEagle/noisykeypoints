@@ -90,12 +90,13 @@ def coarse_target(run, factor=4):
     return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_ct{factor}_', 1), overrides=overrides)
 
 
-def multi_scale(run, factors=(1, 2, 4), sigma='global'):
+def multi_scale(run, factors=(1, 2, 4), sigma='global', normalize=False):
     """BKinD with one decoder head per change-target resolution (full, 2x, 4x averaged), each weighted by
     a learned uncertainty (model/scale_sigma.py). sigma 'global' = one number per head -> CalMS21_msg_*,
     'image' = predicted per image pair -> CalMS21_msi_*: multi_scale(bench('pg', 95, 1), sigma='image')."""
-    tag = {'global': 'msg', 'image': 'msi'}[sigma]
-    overrides = dict(run.get('overrides', {}), multi_scale=dict(factors=list(factors), sigma=sigma))
+    tag = {'global': 'msg', 'image': 'msi'}[sigma] + ('n' if normalize else '')   # n: total weight fixed at 1
+    ms = dict(factors=list(factors), sigma=sigma, **({'normalize': True} if normalize else {}))
+    overrides = dict(run.get('overrides', {}), multi_scale=ms)
     return dict(run, name=run['name'].replace('CalMS21_', f'CalMS21_{tag}_', 1), overrides=overrides)
 
 

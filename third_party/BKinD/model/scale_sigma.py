@@ -9,6 +9,11 @@ change_target.py). Each head's loss L_k is weighted by a learned uncertainty (Ke
 The optimum is exp(s_k) = L_k, so a head whose target is mostly unexplainable noise (full resolution
 under grain) gets a large sigma and counts less; on clean frames the fine head keeps its weight.
 
+With `normalize: true` the total weight is fixed at 1 (as for ct4's single head) and sigma only decides
+the split: loss = sum_k p_k * L_k with p = softmax(-s) (no gradient through p), plus the uncertainty loss
+above on the detached L_k, which trains s alone. p_k is then proportional to 1 / L_k. Without it the
+weights exp(-s) grew to ~30 (2026-11-27), so the change loss swamped the rotation and separation losses.
+
   sigma: global   one learned s_k per head, shared by all images (n_scales numbers).
   sigma: image    s_k predicted per image pair by a small CNN on frames A and B (it can see how grainy
                   the pair is). The last layer starts at zero, so both modes start with s = 0.
@@ -60,3 +65,8 @@ def multi_scale_args(args):
     if not cfg:
         return (), None
     return tuple(int(f) for f in cfg.get('factors', (1, 2, 4))), cfg.get('sigma', 'global')
+
+
+def multi_scale_normalize(args):
+    cfg = getattr(args, 'multi_scale', None)
+    return bool(cfg and cfg.get('normalize', False))

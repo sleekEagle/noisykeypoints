@@ -7,7 +7,7 @@ from loss.separation_loss import separation_loss
 from loss.rotation_loss import rotation_loss
 from loss.ssim_loss import compute_ssim
 from loss.change_target import change_target, coarse_target  # noisykeypoints
-from model.scale_sigma import multi_scale_args  # noisykeypoints
+from model.scale_sigma import multi_scale_args, multi_scale_normalize  # noisykeypoints
 
 from model.vggforLoss import mse_loss_mask, VGG_feat
 
@@ -94,8 +94,16 @@ class computeLoss:
                        coarse_target(inputs, tr_inputs, f) for f in factors]
             L = torch.stack([self._recon_loss(t, output[0][:, 3 * k:3 * k + 3], loss_mask, amp)
                              for k, t in enumerate(targets)], 1)             # (B, n_scales)
-            loss = (L * torch.exp(-log_var) + log_var).mean(1).mean()
-            weight = torch.exp(-log_var).detach().mean(0)
+            if multi_scale_normalize(self.args):
+                # noisykeypoints: total weight fixed at 1 (as in ct4); sigma only splits it between heads.
+                # sigma is trained by the uncertainty loss on the DETACHED head losses, so it cannot
+                # change how hard the change loss pushes on the keypoints next to rotation/separation.
+                p = torch.softmax(-log_var, 1)                                # (B, n_scales), rows sum to 1
+                loss = (p.detach() * L).sum(1).mean() +                     (L.detach() * torch.exp(-log_var) + log_var).mean(1).mean()
+                weight = p.detach().mean(0)
+            else:
+                loss = (L * torch.exp(-log_var) + log_var).mean(1).mean()
+                weight = torch.exp(-log_var).detach().mean(0)
             self.last_scale = dict(L=L.detach().mean(0), weight=weight, factors=factors)
             self.last_head = int(weight.argmax())                            # head shown in samples
             self.last_target = targets[self.last_head][:, :1].detach()
