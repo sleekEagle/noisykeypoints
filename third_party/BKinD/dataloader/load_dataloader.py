@@ -83,6 +83,19 @@ def load_dataloader(args):
                               image_size=[args.image_size, args.image_size],
                               loader=loader, noise=noise, input_frames=getattr(args, 'input_frames', None))
 
+    elif args.dataset == 'EchoNet':  # noisykeypoints: dataloader/echo_dataset.py
+        from dataloader import echo_dataset
+        noise = getattr(args, 'noise', None)
+        print('noise:', noise)
+        for opt in ('motion_mask', 'tracks', 'temporal', 'input_frames', 'fg_penalty'):
+            assert not getattr(args, opt, None), f'{opt} is not supported for EchoNet yet'
+        tf = transforms.Compose([transforms.ToTensor(), normalize])  # frames are already image_size
+        kw = dict(image_size=[args.image_size, args.image_size], noise=noise,
+                  frame_gap_s=float(getattr(args, 'frame_gap_s', 0.1)),
+                  pair_stride=int(getattr(args, 'pair_stride', 10)))
+        train_dataset = echo_dataset.EchoDataset(args.data, tf, tf, split='TRAIN', **kw)
+        val_dataset = echo_dataset.EchoDataset(args.data, tf, tf, split='VAL', **kw)
+
     elif args.dataset == 'custom_dataset':
         traindir = os.path.join(args.data, 'train')
         valdir = os.path.join(args.data, 'val')
@@ -114,7 +127,7 @@ def load_dataloader(args):
                               loader=loader, frame_gap=args.frame_gap)
 
     else:
-        assert args.dataset in ["H36M", "CalMS21", "custom_dataset"], \
+        assert args.dataset in ["H36M", "CalMS21", "EchoNet", "custom_dataset"], \
         "Please write your own dataloader using custom_dataset.py and add your dataset name here"
 
     return train_dataset, val_dataset

@@ -36,6 +36,7 @@ DATASETS = {
     # (scoring and saving the output); poll: minutes between progress lines.
     'calms21': dict(config='CalMS21_clean.yaml', reserve=0.5, poll=5),
     'jhmdb': dict(config='JHMDB.yaml', reserve=0.7, poll=2),
+    'echonet': dict(config='EchoNet.yaml', reserve=0.5, poll=5, workers=6),
 }
 
 
@@ -92,6 +93,32 @@ def prepare_calms21(data):
     return split
 
 
+def prepare_echonet(data):
+    """Copy the prepared EchoNet-Dynamic folder (scripts/prepare_echonet.py: videos/*.npz + videos.json;
+    INPUT points at it) to `data`/echonet and check it. videos.json is copied last, so a folder without
+    it is an incomplete copy. Returns the folder."""
+    dst = f'{data}/echonet'
+    if not os.path.exists(f'{dst}/videos.json'):
+        src = find_dir(lambda r, ds, fs: 'videos.json' in fs and 'videos' in ds)
+        assert src, f'could not find the prepared EchoNet folder (videos.json + videos/) under {INPUT}'
+        print('EchoNet found in', src)
+        shutil.rmtree(dst, ignore_errors=True)
+        os.makedirs(f'{dst}/videos')
+        t = time.time()
+        files = os.listdir(f'{src}/videos')
+        with ThreadPoolExecutor(32) as ex:
+            list(ex.map(lambda f: shutil.copyfile(f'{src}/videos/{f}', f'{dst}/videos/{f}'), files))
+        shutil.copyfile(f'{src}/labels.npz', f'{dst}/labels.npz')
+        shutil.copyfile(f'{src}/videos.json', f'{dst}/videos.json')
+        print(f'copied {len(files)} videos in {(time.time() - t) / 60:.1f} min')
+    info = json.load(open(f'{dst}/videos.json'))
+    missing = [v for v, r in info.items() if not set(r['flags']) & {'size', 'no fan'}
+               and not os.path.exists(f'{dst}/videos/{v}.npz')]
+    assert not missing, f'{len(missing)} videos missing, e.g. {missing[:3]}'
+    print('data ready:', len(info), 'videos')
+    return dst
+
+
 def prepare_jhmdb(data):
     """Find the 3 JHMDB uploads (JHMDB_rgb, joint_positions, splits; folders or zips) and build
     split 1 with prepare_jhmdb_bkind.py. Returns (split folder, raw JHMDB folder)."""
@@ -138,7 +165,7 @@ def prepare_jhmdb(data):
 
 # ---------------------------------------------------------------- training
 
-def make_configs(runs, config, split, out, train_hours, runs_per_gpu=1):
+def make_configs(runs, config, split, out, train_hours, runs_per_gpu=1, workers=2):
     """Write one config per run: the experiment settings from `config`, plus the run's overrides,
     with this session's paths, seed and time limit. Runs are placed runs_per_gpu to a GPU, in order
     (run i on GPU i // runs_per_gpu)."""
@@ -154,8 +181,9 @@ def make_configs(runs, config, split, out, train_hours, runs_per_gpu=1):
         # A run may name its own config (e.g. CalMS21_warp.yaml for our method); default: the dataset's.
         run_base = yaml.safe_load(open(f'{BK}/config/{r["base_config"]}')) if r.get('base_config') else base
         cfg = dict(run_base, **r.get('overrides', {}))
-        # 2 loader workers each: Kaggle has 4 CPUs, free Colab 2
-        cfg.update(data=split, checkpoint=r['dir'], gpu=0, workers=r.get('overrides', {}).get('workers', 2),
+        # 2 loader workers each by default (Kaggle has 4 CPUs, free Colab 2); DATASETS may set more
+        cfg.update(data=split, checkpoint=r['dir'], gpu=0,
+                   workers=r.get('overrides', {}).get('workers', workers),
                    seed=r['seed'], max_hours=round(train_hours, 2))
         r['cfg'] = cfg
         r['config'] = f'{BK}/config/kaggle_{r["name"]}.yaml'
@@ -288,11 +316,13 @@ def run(dataset, runs, max_hours=11.5, t0=None, data='/kaggle/temp', out='/kaggl
 
     if dataset == 'calms21':
         split = prepare_calms21(data)
+    elif dataset == 'echonet':
+        split = prepare_echonet(data)
     else:
         split, jhmdb = prepare_jhmdb(data)
 
     train_hours = max_hours - (time.time() - t0) / 3600 - d['reserve']
-    make_configs(runs, d['config'], split, out, train_hours, runs_per_gpu)
+    make_configs(runs, d['config'], split, out, train_hours, runs_per_gpu, d.get('workers', 2))
     train(runs, d['poll'], t0)
     report(runs)
     if dataset == 'jhmdb':

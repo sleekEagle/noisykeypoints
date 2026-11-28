@@ -84,7 +84,7 @@ def download(dataset, workspace):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('runs_file')
-    ap.add_argument('--dataset', default='calms21', choices=['calms21'])
+    ap.add_argument('--dataset', default='calms21', choices=['calms21', 'echonet'])
     ap.add_argument('--max-hours', type=float, default=100.0,
                     help='stop cleanly between epochs after this long (a cost cap; RunPod has no session limit)')
     ap.add_argument('--runs-per-gpu', type=int, default=1)
@@ -106,7 +106,8 @@ def main():
     print('runs:', ', '.join(r['name'] for r in runs), flush=True)
     if not a.no_install:
         subprocess.run([sys.executable, '-m', 'pip', 'install', '-q'] + PACKAGES, check=True)
-    inp = download(a.dataset, a.workspace)
+    # EchoNet is prepared on the network volume by scripts/prepare_echonet.py (no Kaggle download)
+    inp = f'{a.workspace}/data/echonet_dynamic/prepared' if a.dataset == 'echonet' else download(a.dataset, a.workspace)
 
     # Only one launcher per pod uses the GPU at a time: a lock on the pod's local disk (not on the
     # network volume, which other pods share). --wait queues behind the launcher holding it.

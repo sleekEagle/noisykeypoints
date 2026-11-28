@@ -1,0 +1,39 @@
+# EchoNet-Dynamic (apical 4-chamber echo, real speckle), prepared by scripts/prepare_echonet.py (repo root):
+# videos/<name>.npz (grey 112x112, black outside the fan) + videos.json. Loader: dataloader/echo_dataset.py.
+# Settings as our JHMDB standard (128 px, batch 32, amp, 30 epochs) except the frame pairs.
+
+# Dataset
+dataset: EchoNet
+data: /root/data/echonet          # the prepared folder (runpod_bkind copies it to the pod's local disk)
+
+# Training information
+workers: 6
+epochs: 30
+start_epoch: 0
+schedule: 30
+batch_size: 32
+lr: 0.001
+momentum: 0.9
+weight_decay: 0.0001
+print_freq: 10
+pretrained: True
+gpu: 0
+val_schedule: 40        # > epochs: no val pass
+curriculum: 4
+amp: True
+seed: null
+max_hours: null
+noise: null             # no synthetic noise on echo for now (real speckle; user, 2026-11-27)
+
+checkpoint: checkpoint/EchoNet
+nkpts: 10
+
+# Hyperparameters
+image_size: 128         # frames are 112x112, resized up (user, 2026-11-28)
+frame_gap_s: 0.1        # pair = frame t and t + round(0.1 s x fps): 5 frames at 50 fps (user, 2026-11-28)
+pair_stride: 10         # a pair starts every 10 frames: ~127k TRAIN pairs per epoch
+frame_gap: 5            # not used by the echo loader (it uses frame_gap_s)
+bounding_box: False
+
+perc_weight: [100.0, 1.6, 2.3, 1.8, 2.8, 100.0]
+evaluate: False
