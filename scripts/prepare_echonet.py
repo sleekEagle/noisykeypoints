@@ -7,7 +7,7 @@ the fan = changing, on-map pixels -> largest region -> convex hull; inside the f
 coordinates).
 
 Output (keep private; EchoNet's research-use licence):
-  <out>/videos/<name>.npy    uint8 (T, 112, 112) grey frames, black outside the fan
+  <out>/videos/<name>.npz    frames uint8 (T, 112, 112) grey, black outside the fan; fan bool (112, 112)
   <out>/videos.json          per video: split, fps, frames, EF/ESV/EDV, fan_frac, overlay px, flags
   <out>/labels.npz           for the 2 traced frames of each video (ED = larger LV area, ES = smaller):
                              <name>/frames (2,) [ED, ES] frame index, <name>/landmarks (2, 3, 2) apex,
@@ -23,7 +23,8 @@ the axis diagonally (towards the base and to each side; the chords are perpendic
 spans it).
 Flags: 'size' (not 112 x 112; skipped), 'tracing' (not 21 lines per traced frame or not 2 traced frames;
 no labels written), 'fan area' (fan area > 40% off the median), 'trace outside fan' (< 95% of contour
-points inside the fan).
+points inside the fan; checked: the tracing itself runs past the image edge, usually at the apex; the
+mask cuts no tissue).
 
     python scripts/prepare_echonet.py --root /workspace/data/echonet_dynamic/EchoNet-Dynamic \
         --out /workspace/data/echonet_dynamic/prepared --workers 32
@@ -109,7 +110,7 @@ def work(job):
         rec['flags'].append('no fan')
         return name, rec, None, None
     vid, fan, n_over = r
-    np.save(os.path.join(A.out, 'videos', name + '.npy'), vid)
+    np.savez_compressed(os.path.join(A.out, 'videos', name + '.npz'), frames=vid, fan=fan)
     rec.update(frames=len(vid), fan_frac=float(fan.mean()), overlay_px_mean=float(n_over.mean()))
     lab = labels(tr) if tr is not None else None
     if lab is None:
