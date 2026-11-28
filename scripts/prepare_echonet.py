@@ -19,7 +19,7 @@ Output (keep private; EchoNet's research-use licence):
 Tracing format (VolumeTracings.csv): per traced frame, the first line is the LV long axis; the others are
 chords across the LV, whose endpoints form the outline. Apex = the long-axis end nearer the top (apical
 view); annulus = the two outline points in the basal 15% of the long axis that lie farthest apart across
-the axis (the chords are perpendicular to the axis, but the annulus is often slanted, so no single chord
+the axis diagonally (towards the base and to each side; the chords are perpendicular to the axis, but the annulus is often slanted, so no single chord
 spans it).
 Flags: 'size' (not 112 x 112; skipped), 'tracing' (not 21 lines per traced frame or not 2 traced frames;
 no labels written), 'fan area' (fan area > 40% off the median), 'trace outside fan' (< 95% of contour
@@ -87,8 +87,9 @@ def labels(tr):
         n = np.array([-u[1], u[0]])  # across the axis
         along = (contour - apex) @ u
         near = contour[along >= 0.85 * along.max()]  # outline points in the basal 15%
-        across = (near - base) @ n
-        lm = np.stack([apex, near[np.argmin(across)], near[np.argmax(across)]])  # the annulus corners
+        d = near - base
+        # each corner = the point farthest out diagonally (towards the base and to that side)
+        lm = np.stack([apex, near[np.argmax(d @ (u - n))], near[np.argmax(d @ (u + n))]])  # annulus corners
         res.append((f, lm, contour, area))
     res.sort(key=lambda z: -z[3])  # ED (larger area) first
     return dict(frames=np.array([z[0] for z in res]), landmarks=np.stack([z[1] for z in res]),
