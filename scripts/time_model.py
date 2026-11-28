@@ -44,7 +44,10 @@ class Args(dict):
 
 
 def load_bkind(run, runs_dir, device):
-    cfg = yaml.safe_load(open(os.path.join(BK, 'config', f'kaggle_{run}.yaml')))
+    cp = os.path.join(BK, 'config', f'kaggle_{run}.yaml')
+    cfg = yaml.safe_load(open(cp)) if os.path.exists(cp) else {}  # old Kaggle runs (e.g. clean_s1): clean, 10 kpts
+    if not cfg:
+        print(f'no config {cp}: assuming clean frames, 10 keypoints', flush=True)
     ck = torch.load(os.path.join(runs_dir, run, 'checkpoint.pth.tar'), map_location='cpu', weights_only=False)
     sd = {k[7:] if k.startswith('module.') else k: v for k, v in ck['state_dict'].items()}
     if sd['encoder.conv1.weight'].shape[1] != 3:
