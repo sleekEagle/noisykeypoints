@@ -1,6 +1,7 @@
 """noisykeypoints: EchoNet-Dynamic loader for BKinD (frame pairs from the prepared videos).
 
-The data folder is the output of scripts/prepare_echonet.py: videos/<name>.npz (frames uint8 (T, 112, 112),
+The data folder is the output of scripts/prepare_echonet.py: videos/<name>.npz (or <name>.npy, the unpacked
+copy kaggle_bkind.prepare_echonet makes on local disk; read by memory map, much faster) (frames uint8 (T, 112, 112),
 grey, black outside the fan) and videos.json (split, fps, flags). Videos flagged 'size', 'no fan' or
 'fan area' are left out.
 
@@ -56,10 +57,11 @@ class EchoDataset(data.Dataset):
 
     def __getitem__(self, index):
         name, t0, t1 = self.samples[index]
-        frames = np.load(os.path.join(self.root, 'videos', name + '.npz'))['frames']
+        npy = os.path.join(self.root, 'videos', name + '.npy')  # unpacked copy (kaggle_bkind.prepare_echonet)
+        frames = np.load(npy, mmap_mode='r') if os.path.exists(npy) else             np.load(os.path.join(self.root, 'videos', name + '.npz'))['frames']
         height, width = self._image_size[:2]
         paths = [self._path(name, t0), self._path(name, t1)]
-        ims = [Image.fromarray(frames[t]).convert('RGB').resize((width, height), Image.BILINEAR) for t in (t0, t1)]
+        ims = [Image.fromarray(np.asarray(frames[t])).convert('RGB').resize((width, height), Image.BILINEAR) for t in (t0, t1)]
         image0, image1 = apply_noise_pair(ims, self.noise, paths)
 
         rot_image1 = self.target_transform(TF.rotate(image1, 90))

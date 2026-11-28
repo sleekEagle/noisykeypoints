@@ -95,7 +95,7 @@ def prepare_calms21(data):
 
 def prepare_echonet(data):
     """Copy the prepared EchoNet-Dynamic folder (scripts/prepare_echonet.py: videos/*.npz + videos.json;
-    INPUT points at it) to `data`/echonet and check it. videos.json is copied last, so a folder without
+    INPUT points at it) to `data`/echonet, unpacked to videos/*.npy (~21 GB), and check it. videos.json is copied last, so a folder without
     it is an incomplete copy. Returns the folder."""
     dst = f'{data}/echonet'
     if not os.path.exists(f'{dst}/videos.json'):
@@ -106,14 +106,18 @@ def prepare_echonet(data):
         os.makedirs(f'{dst}/videos')
         t = time.time()
         files = os.listdir(f'{src}/videos')
-        with ThreadPoolExecutor(32) as ex:
-            list(ex.map(lambda f: shutil.copyfile(f'{src}/videos/{f}', f'{dst}/videos/{f}'), files))
+        import numpy as np
+
+        def unpack(f):  # uncompressed .npy, so the loader reads 2 frames by memory map, not a whole video
+            np.save(f'{dst}/videos/{f[:-4]}.npy', np.load(f'{src}/videos/{f}')['frames'])
+        with ThreadPoolExecutor(16) as ex:
+            list(ex.map(unpack, files))
         shutil.copyfile(f'{src}/labels.npz', f'{dst}/labels.npz')
         shutil.copyfile(f'{src}/videos.json', f'{dst}/videos.json')
         print(f'copied {len(files)} videos in {(time.time() - t) / 60:.1f} min')
     info = json.load(open(f'{dst}/videos.json'))
     missing = [v for v, r in info.items() if not set(r['flags']) & {'size', 'no fan'}
-               and not os.path.exists(f'{dst}/videos/{v}.npz')]
+               and not os.path.exists(f'{dst}/videos/{v}.npy')]
     assert not missing, f'{len(missing)} videos missing, e.g. {missing[:3]}'
     print('data ready:', len(info), 'videos')
     return dst
